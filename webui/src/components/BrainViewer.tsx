@@ -91,6 +91,11 @@ export function BrainViewer({
         <h3>Atlas Viewer</h3>
         <p>Axial, coronal, sagittal slices by default, with optional 3D volume rendering and signed ROI overlays.</p>
       </div>
+      <div className="overlay-legend" aria-label="Overlay legend">
+        <span className="overlay-legend-label negative">Red: negative change, ROI volume loss</span>
+        <div className="overlay-legend-bar" />
+        <span className="overlay-legend-label positive">Blue: positive change, ROI enlargement</span>
+      </div>
       <div className="brain-canvas-shell">
         {error ? <div className="inline-error">{error}</div> : <canvas ref={canvasRef} className="brain-canvas" />}
       </div>

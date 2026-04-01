@@ -15,7 +15,7 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
 
     def objective(trial: optuna.Trial) -> float:
         trial_config = copy.deepcopy(config)
-        width = trial.suggest_categorical("model_width", [384, 512])
+        width = trial.suggest_categorical("model_width", [384, 512, 640])
         trial_config.model.n_processes = trial.suggest_int("n_processes", 4, 5)
         trial_config.model.encoder_hidden_dims = [width, width // 2]
         trial_config.model.generator_hidden_dims = [width, width, width // 2]
@@ -44,6 +44,8 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
         trial_config.losses.process_sensitivity_target_pct = trial.suggest_float(
             "process_sensitivity_target_pct", 0.08, 0.35
         )
+        trial_config.losses.age_shrinkage = trial.suggest_float("age_shrinkage", 0.0, 0.8)
+        trial_config.losses.process_shrinkage = trial.suggest_float("process_shrinkage", 0.0, 0.6)
         trial_config.training.monitor_metric = trial_config.tuning.objective_metric
         trial_config.experiment_name = config.experiment_name
 

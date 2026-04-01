@@ -81,6 +81,8 @@ age_sensitivity = 0.0
 process_sensitivity = 0.0
 age_sensitivity_target_pct = 0.25
 process_sensitivity_target_pct = 0.10
+age_shrinkage = 0.0
+process_shrinkage = 0.0
 
 [tuning]
 enabled = true

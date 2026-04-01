@@ -53,3 +53,7 @@ def correlation_penalty(process_latents: torch.Tensor, age_targets: torch.Tensor
 
 def latent_sparsity_loss(latents: torch.Tensor) -> torch.Tensor:
     return latents.abs().mean()
+
+
+def nonpositive_change_loss(delta: torch.Tensor) -> torch.Tensor:
+    return F.relu(delta).mean()

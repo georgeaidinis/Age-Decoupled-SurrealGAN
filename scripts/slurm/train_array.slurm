@@ -15,6 +15,7 @@ module load slurm/current
 PROJECT_ROOT="${PROJECT_ROOT:-/cbica/projects/YOUR_PROJECT/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
 CONFIG_LIST_FILE="${CONFIG_LIST_FILE:-scripts/slurm/config_list.txt}"
+RESUME_RUN_DIR="${RESUME_RUN_DIR:-}"
 
 source "${HOME}/miniconda3/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV_NAME}"
@@ -30,4 +31,8 @@ if [[ -z "${CONFIG_PATH}" ]]; then
 fi
 
 echo "Using config: ${CONFIG_PATH}"
-srun python -m age_decoupled_surrealgan.cli --config "${CONFIG_PATH}" train
+if [[ -n "${RESUME_RUN_DIR}" ]]; then
+  srun python -m age_decoupled_surrealgan.cli --config "${CONFIG_PATH}" train --resume-run-dir "${RESUME_RUN_DIR}"
+else
+  srun python -m age_decoupled_surrealgan.cli --config "${CONFIG_PATH}" train
+fi

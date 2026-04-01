@@ -29,12 +29,16 @@ TRAIN_TENSORBOARD_TAGS = {
     "process_sparse": "loss/ablation/process_latent_sparsity",
     "age_sensitivity": "loss/generator/age_sensitivity_margin",
     "process_sensitivity": "loss/generator/process_sensitivity_margin",
+    "age_shrinkage": "loss/generator/age_shrinkage_bias",
+    "process_shrinkage": "loss/generator/process_shrinkage_bias",
     "state_age_latent_mean": "state/latents/age_mean",
     "state_process_latent_abs_mean": "state/latents/process_abs_mean",
     "state_fake_change_abs_mean": "state/change/fake_abs_mean",
     "state_age_sensitivity_pct": "state/sensitivity/age_pct",
     "state_process_sensitivity_pct": "state/sensitivity/process_pct",
     "state_process_separation_pct": "state/sensitivity/process_separation_pct",
+    "state_age_growth_penalty": "state/sensitivity/age_growth_penalty",
+    "state_process_growth_penalty": "state/sensitivity/process_growth_penalty",
 }
 
 

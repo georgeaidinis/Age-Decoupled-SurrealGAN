@@ -185,6 +185,35 @@ input[type="range"] {
   overflow: hidden;
 }
 
+.overlay-legend {
+  display: grid;
+  grid-template-columns: max-content minmax(120px, 1fr) max-content;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.overlay-legend-bar {
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 36, 50, 0.12);
+  background: linear-gradient(90deg, rgba(214, 69, 65, 0.95) 0%, rgba(240, 240, 240, 0.25) 50%, rgba(55, 128, 220, 0.95) 100%);
+}
+
+.overlay-legend-label {
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.overlay-legend-label.negative {
+  color: #8d2e2e;
+}
+
+.overlay-legend-label.positive {
+  color: #235aa6;
+  text-align: right;
+}
+
 .brain-canvas-shell {
   width: 100%;
   height: 520px;
@@ -302,5 +331,13 @@ input[type="range"] {
     height: 420px;
     min-height: 420px;
     max-height: 420px;
+  }
+
+  .overlay-legend {
+    grid-template-columns: 1fr;
+  }
+
+  .overlay-legend-label.positive {
+    text-align: left;
   }
 }

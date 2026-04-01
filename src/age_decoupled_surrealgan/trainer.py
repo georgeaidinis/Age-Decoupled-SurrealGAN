@@ -26,6 +26,7 @@ from .losses import (
     generator_adversarial_loss,
     latent_sparsity_loss,
     monotonicity_loss,
+    nonpositive_change_loss,
     orthogonality_loss,
 )
 from .metrics import summarize_latent_sensitivity
@@ -81,7 +82,7 @@ class AgeDecoupledTrainer:
         self,
         model: AgeDecoupledSurrealGAN,
         reference_features: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch = reference_features.shape[0]
         baseline_abs = reference_features.abs().clamp_min(1.0)
         zero_process = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
@@ -96,15 +97,19 @@ class AgeDecoupledTrainer:
         fake_low_age, _ = model.synthesize(reference_features, age_low, zero_process)
         fake_high_age, _ = model.synthesize(reference_features, age_high, zero_process)
         age_sensitivity_pct = ((fake_high_age - fake_low_age).abs() / baseline_abs).mean() * 100.0
+        age_shrinkage_penalty = nonpositive_change_loss(fake_high_age - fake_low_age)
 
         process_responses: list[torch.Tensor] = []
         process_targets: list[torch.Tensor] = []
+        process_shrinkage_penalties: list[torch.Tensor] = []
+        fake_anchor_process, _ = model.synthesize(reference_features, process_anchor_age, zero_process)
         for idx in range(self.config.model.n_processes):
             process_latents = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
             process_latents[:, idx] = 1.0
             fake_process, _ = model.synthesize(reference_features, process_anchor_age, process_latents)
             process_targets.append(fake_process)
-            process_responses.append(((fake_process - fake_low_age).abs() / baseline_abs).mean() * 100.0)
+            process_responses.append(((fake_process - fake_anchor_process).abs() / baseline_abs).mean() * 100.0)
+            process_shrinkage_penalties.append(nonpositive_change_loss(fake_process - fake_anchor_process))
 
         mean_process_sensitivity_pct = (
             torch.stack(process_responses).mean() if process_responses else torch.tensor(0.0, device=reference_features.device)
@@ -118,7 +123,18 @@ class AgeDecoupledTrainer:
             if pairwise_distances
             else torch.tensor(0.0, device=reference_features.device)
         )
-        return age_sensitivity_pct, mean_process_sensitivity_pct, process_separation_pct
+        mean_process_shrinkage_penalty = (
+            torch.stack(process_shrinkage_penalties).mean()
+            if process_shrinkage_penalties
+            else torch.tensor(0.0, device=reference_features.device)
+        )
+        return (
+            age_sensitivity_pct,
+            mean_process_sensitivity_pct,
+            process_separation_pct,
+            age_shrinkage_penalty,
+            mean_process_shrinkage_penalty,
+        )
 
     @torch.no_grad()
     def _compute_latent_sensitivity_metrics(self, model: AgeDecoupledSurrealGAN, split_name: str) -> dict[str, Any]:
@@ -356,10 +372,13 @@ class AgeDecoupledTrainer:
                     "process_sparse": latent_sparsity_loss(outputs.process_latents),
                 }
                 sensitivity_reference = ref_x[: min(ref_x.shape[0], 16)]
-                age_sensitivity_pct, process_sensitivity_pct, process_separation_pct = self._latent_sensitivity_batch_metrics(
-                    model,
-                    sensitivity_reference,
-                )
+                (
+                    age_sensitivity_pct,
+                    process_sensitivity_pct,
+                    process_separation_pct,
+                    age_shrinkage_penalty,
+                    process_shrinkage_penalty,
+                ) = self._latent_sensitivity_batch_metrics(model, sensitivity_reference)
                 losses["age_sensitivity"] = torch.relu(
                     torch.tensor(self.config.losses.age_sensitivity_target_pct, device=ref_x.device) - age_sensitivity_pct
                 )
@@ -367,6 +386,8 @@ class AgeDecoupledTrainer:
                     torch.tensor(self.config.losses.process_sensitivity_target_pct, device=ref_x.device)
                     - process_sensitivity_pct
                 )
+                losses["age_shrinkage"] = age_shrinkage_penalty
+                losses["process_shrinkage"] = process_shrinkage_penalty
                 total_loss = (
                     self.config.losses.adversarial * losses["adv"]
                     + self.config.losses.age_supervision * losses["age_sup"]
@@ -385,6 +406,8 @@ class AgeDecoupledTrainer:
                     + self.config.losses.process_latent_sparsity * losses["process_sparse"]
                     + self.config.losses.age_sensitivity * losses["age_sensitivity"]
                     + self.config.losses.process_sensitivity * losses["process_sensitivity"]
+                    + self.config.losses.age_shrinkage * losses["age_shrinkage"]
+                    + self.config.losses.process_shrinkage * losses["process_shrinkage"]
                 )
             optimizer_g.zero_grad(set_to_none=True)
             scaler.scale(total_loss).backward()
@@ -400,6 +423,8 @@ class AgeDecoupledTrainer:
                 "state_age_sensitivity_pct": age_sensitivity_pct.detach(),
                 "state_process_sensitivity_pct": process_sensitivity_pct.detach(),
                 "state_process_separation_pct": process_separation_pct.detach(),
+                "state_age_growth_penalty": age_shrinkage_penalty.detach(),
+                "state_process_growth_penalty": process_shrinkage_penalty.detach(),
             }
             step_metrics = {"discriminator": d_loss, "generator_total": total_loss, **losses, **state_metrics}
             for key, value in step_metrics.items():

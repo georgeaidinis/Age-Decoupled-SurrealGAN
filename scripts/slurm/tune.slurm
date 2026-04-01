@@ -14,7 +14,7 @@ module load slurm/current
 
 PROJECT_ROOT="${PROJECT_ROOT:-/cbica/projects/YOUR_PROJECT/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
-CONFIG_PATH="${CONFIG_PATH:-src/age_decoupled_surrealgan/configs/default.toml}"
+CONFIG_PATH="${CONFIG_PATH:-src/age_decoupled_surrealgan/configs/extended_tune.toml}"
 
 source "${HOME}/miniconda3/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV_NAME}"

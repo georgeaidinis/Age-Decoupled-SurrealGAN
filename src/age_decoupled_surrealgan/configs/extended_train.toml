@@ -51,3 +51,5 @@ age_sensitivity = 2.0
 process_sensitivity = 0.9
 age_sensitivity_target_pct = 0.35
 process_sensitivity_target_pct = 0.20
+age_shrinkage = 0.4
+process_shrinkage = 0.2

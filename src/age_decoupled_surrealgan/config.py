@@ -105,6 +105,8 @@ class LossConfig:
     process_sensitivity: float = 0.0
     age_sensitivity_target_pct: float = 0.25
     process_sensitivity_target_pct: float = 0.10
+    age_shrinkage: float = 0.0
+    process_shrinkage: float = 0.0
 
 
 @dataclass
