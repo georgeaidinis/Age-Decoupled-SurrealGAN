@@ -1,74 +1,200 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { BrainViewer } from "./components/BrainViewer";
 import { SliderPanel } from "./components/SliderPanel";
-import { atlasManifest, getSubjects, inferSubject, listRuns } from "./lib/api";
+import {
+  atlasManifest,
+  getRunMetadata,
+  getSubjectDefaults,
+  getSubjects,
+  inferSubject,
+  listRuns,
+  type InferenceResponse,
+  type SubjectRow,
+} from "./lib/api";
 
-type InferenceResponse = {
-  metadata: Record<string, string | number | null>;
-  inference: {
-    n_processes: number;
-    age_latent: number;
-    process_latents: number[];
-  };
-  top_changes: Array<{
-    roi_name: string;
-    roi_full_name: string;
-    delta: number;
-  }>;
+type RunMetadata = {
+  n_processes: number;
 };
 
 export function App() {
   const [runs, setRuns] = useState<Array<{ run_name: string }>>([]);
   const [selectedRun, setSelectedRun] = useState("");
+  const [runMetadata, setRunMetadata] = useState<RunMetadata | null>(null);
   const [splitName, setSplitName] = useState("application");
-  const [subjects, setSubjects] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<SubjectRow[]>([]);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const [subjectMetadata, setSubjectMetadata] = useState<Record<string, string | number | null> | null>(null);
   const [inference, setInference] = useState<InferenceResponse | null>(null);
-  const [sliderValues, setSliderValues] = useState<number[]>([]);
+  const [ageYears, setAgeYears] = useState(20);
+  const [processLatents, setProcessLatents] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<"slices" | "volume">("slices");
-  const [atlasUrls, setAtlasUrls] = useState<{ atlas_image_url: string; atlas_segmentation_url: string } | null>(null);
+  const [atlasUrls, setAtlasUrls] = useState<{ atlas_image_url: string } | null>(null);
+  const [overlayImageUrl, setOverlayImageUrl] = useState<string | null>(null);
+  const [loadingDefaults, setLoadingDefaults] = useState(false);
+  const [loadingInference, setLoadingInference] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listRuns().then(setRuns).catch(console.error);
-    atlasManifest().then(setAtlasUrls).catch(console.error);
+    Promise.all([listRuns(), atlasManifest()])
+      .then(([loadedRuns, manifest]) => {
+        setRuns(loadedRuns);
+        setAtlasUrls({ atlas_image_url: manifest.atlas_image_url });
+      })
+      .catch((loadError) => {
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to initialize the application.");
+      });
   }, []);
+
+  useEffect(() => {
+    if (!selectedRun) {
+      setRunMetadata(null);
+      setSubjects([]);
+      setSelectedRow(null);
+      setSubjectMetadata(null);
+      setInference(null);
+      setOverlayImageUrl(null);
+      setAgeYears(20);
+      setProcessLatents([]);
+      return;
+    }
+    let cancelled = false;
+    setError(null);
+    setInference(null);
+    setOverlayImageUrl(null);
+    getRunMetadata(selectedRun)
+      .then((metadata: any) => {
+        if (cancelled) {
+          return;
+        }
+        setRunMetadata(metadata);
+        setProcessLatents(Array.from({ length: metadata.n_processes ?? 0 }, () => 0));
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to load run metadata.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRun]);
 
   useEffect(() => {
     if (!selectedRun) {
       return;
     }
+    let cancelled = false;
+    setSubjects([]);
+    setSelectedRow(null);
+    setSubjectMetadata(null);
+    setInference(null);
+    setOverlayImageUrl(null);
+    setError(null);
     getSubjects(selectedRun, splitName)
       .then((rows) => {
-        setSubjects(rows);
-        if (rows.length > 0) {
-          setSelectedRow(rows[0].row_index);
+        if (cancelled) {
+          return;
         }
+        setSubjects(rows);
+        setSelectedRow(rows.length > 0 ? rows[0].row_index : null);
       })
-      .catch(console.error);
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to load split subjects.");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRun, splitName]);
 
   useEffect(() => {
     if (!selectedRun || selectedRow === null) {
       return;
     }
-    inferSubject(selectedRun, splitName, selectedRow)
-      .then((payload: any) => {
-        setInference(payload);
-        setSliderValues(payload.inference.process_latents);
+    let cancelled = false;
+    setLoadingDefaults(true);
+    setInference(null);
+    setOverlayImageUrl(null);
+    setError(null);
+    getSubjectDefaults(selectedRun, splitName, selectedRow)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setSubjectMetadata(payload.metadata);
+        setAgeYears(payload.defaults.age_years);
+        setProcessLatents(payload.defaults.process_latents);
       })
-      .catch(console.error);
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to load subject defaults.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDefaults(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRun, splitName, selectedRow]);
+
+  const handleGenerate = () => {
+    if (!selectedRun || selectedRow === null) {
+      return;
+    }
+    setLoadingInference(true);
+    setError(null);
+    inferSubject(selectedRun, splitName, selectedRow, ageYears, processLatents)
+      .then((payload) => {
+        setInference(payload);
+        setOverlayImageUrl(payload.overlay_image_url);
+      })
+      .catch((loadError) => {
+        console.error(loadError);
+        setInference(null);
+        setOverlayImageUrl(null);
+        setError(loadError instanceof Error ? loadError.message : "Inference failed.");
+      })
+      .finally(() => setLoadingInference(false));
+  };
 
   const topChanges = useMemo(
     () =>
       (inference?.top_changes ?? []).map((row) => ({
-        name: row.roi_name,
-        delta: row.delta,
+        name: row.roi_name ?? row.roi_full_name ?? "Unknown ROI",
+        percent_change: Number(row.percent_change ?? 0),
+        delta: Number(row.delta ?? 0),
+        baseline_value: Number(row.baseline_value ?? 0),
+        predicted_value: Number(row.predicted_value ?? 0),
       })),
     [inference],
   );
+
+  const chartMode = useMemo(() => {
+    const maxPercent = topChanges.reduce((current, row) => Math.max(current, Math.abs(row.percent_change)), 0);
+    return maxPercent >= 0.01 ? "percent" : "delta";
+  }, [topChanges]);
+
+  const overlayAbsMax = useMemo(() => {
+    const values = inference?.inference.percent_change ?? [];
+    const maxValue = values.reduce((current, value) => Math.max(current, Math.abs(value)), 0);
+    return Math.max(maxValue, 1);
+  }, [inference]);
+
+  const currentMetadata = inference?.metadata ?? subjectMetadata ?? {};
+  const controlsDisabled = !selectedRun || selectedRow === null || loadingDefaults || loadingInference;
 
   return (
     <main className="app-shell">
@@ -76,7 +202,7 @@ export function App() {
         <div className="brand-block">
           <p className="eyebrow">Age-Decoupled SurrealGAN</p>
           <h1>ROI Latent Explorer</h1>
-          <p>Inspect age latents, process latents, and ROI-level shifts on top of the IXI atlas.</p>
+          <p>Generate ROI-space changes from age and process controls, then visualize them on the atlas.</p>
         </div>
 
         <div className="control-group">
@@ -93,7 +219,7 @@ export function App() {
 
         <div className="control-group">
           <label>Split</label>
-          <select value={splitName} onChange={(event) => setSplitName(event.target.value)}>
+          <select value={splitName} onChange={(event) => setSplitName(event.target.value)} disabled={!selectedRun}>
             <option value="application">Application</option>
             <option value="ood_test">OOD test</option>
             <option value="id_test">ID test</option>
@@ -106,8 +232,10 @@ export function App() {
           <label>Subject</label>
           <select
             value={selectedRow ?? ""}
+            disabled={!selectedRun || subjects.length === 0}
             onChange={(event) => setSelectedRow(Number(event.target.value))}
           >
+            {subjects.length === 0 ? <option value="">No subjects available</option> : null}
             {subjects.map((subject) => (
               <option key={subject.row_index} value={subject.row_index}>
                 {subject.subject_id} | {subject.study} | {subject.diagnosis_group}
@@ -121,12 +249,14 @@ export function App() {
           <div className="segmented-control">
             <button
               className={viewMode === "slices" ? "active" : ""}
+              type="button"
               onClick={() => setViewMode("slices")}
             >
               2D slices
             </button>
             <button
               className={viewMode === "volume" ? "active" : ""}
+              type="button"
               onClick={() => setViewMode("volume")}
             >
               3D volume
@@ -136,24 +266,36 @@ export function App() {
       </aside>
 
       <section className="content">
+        {error ? (
+          <section className="panel status-panel">
+            <div className="panel-header">
+              <h3>Application error</h3>
+              <p>{error}</p>
+            </div>
+          </section>
+        ) : null}
+
         <div className="hero-grid">
           <section className="panel hero-card">
             <div className="panel-header">
               <h2>Latent summary</h2>
-              <p>The process slider count is derived from the selected checkpoint metadata.</p>
+              <p>
+                The atlas stays grayscale until you click Generate. The age slider uses years, while process sliders
+                remain on a 0 to 1 scale.
+              </p>
             </div>
             <div className="metric-row">
               <div>
-                <span>Age latent</span>
-                <strong>{inference?.inference.age_latent.toFixed(3) ?? "0.000"}</strong>
+                <span>Requested age</span>
+                <strong>{ageYears.toFixed(0)} y</strong>
               </div>
               <div>
                 <span>Processes</span>
-                <strong>{inference?.inference.n_processes ?? 0}</strong>
+                <strong>{runMetadata?.n_processes ?? processLatents.length ?? 0}</strong>
               </div>
             </div>
             <dl className="subject-meta">
-              {Object.entries(inference?.metadata ?? {}).map(([key, value]) => (
+              {Object.entries(currentMetadata).map(([key, value]) => (
                 <div key={key}>
                   <dt>{key}</dt>
                   <dd>{String(value ?? "")}</dd>
@@ -165,30 +307,88 @@ export function App() {
           {atlasUrls ? (
             <BrainViewer
               atlasImageUrl={atlasUrls.atlas_image_url}
-              atlasSegmentationUrl={atlasUrls.atlas_segmentation_url}
+              overlayImageUrl={overlayImageUrl}
+              overlayAbsMax={overlayAbsMax}
               mode={viewMode}
             />
           ) : null}
         </div>
 
-        <SliderPanel processLatents={sliderValues} onChange={setSliderValues} />
+        {(loadingDefaults || loadingInference) && !error ? (
+          <section className="panel status-panel">
+            <div className="panel-header">
+              <h3>{loadingInference ? "Generating ROI changes" : "Loading subject defaults"}</h3>
+              <p>
+                {loadingInference
+                  ? "Applying the selected age/process controls to the chosen subject."
+                  : "Inferring default slider values from the selected subject."}
+              </p>
+            </div>
+          </section>
+        ) : null}
+
+        <SliderPanel
+          ageYears={ageYears}
+          processLatents={processLatents}
+          disabled={controlsDisabled}
+          onAgeChange={setAgeYears}
+          onProcessChange={setProcessLatents}
+          onGenerate={handleGenerate}
+        />
 
         <section className="panel chart-panel">
           <div className="panel-header">
             <h3>Top ROI changes</h3>
-            <p>Largest absolute synthetic changes for the selected subject.</p>
+            <p>
+              {chartMode === "percent"
+                ? "Bars show percent change relative to the selected subject's current ROI volume."
+                : "Percent changes are extremely small for this checkpoint, so the plot is showing raw ROI deltas instead."}
+            </p>
           </div>
           <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={topChanges}>
-                <XAxis dataKey="name" hide />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="delta" fill="#1f6f8b" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {topChanges.length > 0 ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={topChanges}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" hide />
+                  <YAxis
+                    tickFormatter={(value) =>
+                      chartMode === "percent" ? `${Number(value).toFixed(3)}%` : Number(value).toFixed(3)
+                    }
+                  />
+                  <Tooltip
+                    formatter={(value: number, key: string, item: any) => {
+                      if (key === "percent_change" || key === "delta") {
+                        return [
+                          chartMode === "percent"
+                            ? `${Number(item.payload.percent_change).toFixed(4)}%`
+                            : `${Number(item.payload.delta).toFixed(4)}`,
+                          `Δ=${item.payload.delta.toFixed(4)} | %=${item.payload.percent_change.toFixed(4)} | baseline=${item.payload.baseline_value.toFixed(2)} | predicted=${item.payload.predicted_value.toFixed(2)}`,
+                        ];
+                      }
+                      return [String(value), key];
+                    }}
+                  />
+                  <Bar dataKey={chartMode === "percent" ? "percent_change" : "delta"} fill="#1f6f8b" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="empty-chart-state">
+                Select a subject, adjust sliders if needed, and click Generate to populate ROI changes.
+              </div>
+            )}
           </div>
         </section>
+
+        {inference?.debug ? (
+          <section className="panel">
+            <div className="panel-header">
+              <h3>Generation Debug</h3>
+              <p>Useful when a checkpoint appears weakly responsive to latent changes.</p>
+            </div>
+            <pre className="debug-block">{JSON.stringify(inference.debug, null, 2)}</pre>
+          </section>
+        ) : null}
       </section>
     </main>
   );

@@ -1,0 +1,60 @@
+experiment_name = "age-decoupled-surrealgan-overnight-tune"
+
+[training]
+repetitions = 2
+epochs = 120
+batch_size = 96
+learning_rate = 0.00015
+discriminator_learning_rate = 0.00007
+num_workers = 2
+persistent_workers = true
+use_amp = true
+compile_model = false
+device = "auto"
+save_every = 0
+target_regular_checkpoints = 4
+console_log_every = 1
+monitor_split = "val"
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 96
+sensitivity_process_anchor_age = 20.0
+resume_run_dir = ""
+
+[model]
+n_processes = 5
+encoder_hidden_dims = [512, 256]
+generator_hidden_dims = [512, 512, 256]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [512, 256]
+dropout = 0.05
+
+[losses]
+adversarial = 1.25
+age_supervision = 4.5
+reference_age_supervision = 2.0
+age_adversary = 1.0
+latent_reconstruction = 1.0
+decomposition = 1.1
+identity = 2.0
+monotonicity = 0.3
+process_orthogonality = 0.2
+age_process_covariance = 0.4
+reference_process_sparsity = 0.1
+change_magnitude = 0.0
+low_activation_identity = 0.05
+process_age_correlation = 0.0
+process_latent_sparsity = 0.0
+low_activation_max = 0.05
+age_sensitivity = 1.0
+process_sensitivity = 0.75
+age_sensitivity_target_pct = 0.15
+process_sensitivity_target_pct = 0.08
+
+[tuning]
+enabled = true
+trials = 16
+timeout_seconds = 43200
+study_name = "age_decoupled_surrealgan_overnight"
+storage = "sqlite:///runs/optuna_age_decoupled_surrealgan_overnight.db"
+resume_if_exists = true
+objective_metric = "quality_score"

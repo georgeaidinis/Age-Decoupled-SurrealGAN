@@ -46,14 +46,19 @@ discriminator_learning_rate = 0.0001
 weight_decay = 0.0001
 gradient_clip_norm = 5.0
 num_workers = 0
+persistent_workers = false
 use_amp = true
 compile_model = false
 device = "auto"
-save_every = 5
+save_every = 0
+target_regular_checkpoints = 5
 log_every = 10
 console_log_every = 1
 monitor_split = "val"
 monitor_metric = "composite_score"
+sensitivity_eval_subjects = 64
+sensitivity_process_anchor_age = 20.0
+resume_run_dir = ""
 
 [losses]
 adversarial = 1.0
@@ -72,10 +77,18 @@ low_activation_identity = 0.0
 process_age_correlation = 0.0
 process_latent_sparsity = 0.0
 low_activation_max = 0.05
+age_sensitivity = 0.0
+process_sensitivity = 0.0
+age_sensitivity_target_pct = 0.25
+process_sensitivity_target_pct = 0.10
 
 [tuning]
 enabled = true
 trials = 20
+study_name = "age_decoupled_surrealgan"
+storage = "sqlite:///runs/optuna_age_decoupled_surrealgan.db"
+resume_if_exists = true
+objective_metric = "quality_score"
 
 [app]
 api_host = "127.0.0.1"

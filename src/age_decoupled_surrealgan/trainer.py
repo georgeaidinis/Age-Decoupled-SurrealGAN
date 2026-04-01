@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -13,10 +14,10 @@ from torch.amp import autocast, GradScaler
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
-from .config import ProjectConfig
+from .config import ProjectConfig, default_config_path
 from .data.dataset import CohortDataset
 from .evaluation import aggregate_repetition_predictions, evaluate_prediction_frame, save_metrics, save_prediction_frame
-from .inference import resolve_device
+from .inference import normalize_age_years, resolve_device
 from .losses import (
     change_magnitude_loss,
     correlation_penalty,
@@ -27,6 +28,7 @@ from .losses import (
     monotonicity_loss,
     orthogonality_loss,
 )
+from .metrics import summarize_latent_sensitivity
 from .model import AgeDecoupledSurrealGAN
 from .reporting import (
     TRAIN_TENSORBOARD_TAGS,
@@ -39,6 +41,7 @@ from .reporting import (
     save_jsonl,
     save_records_csv,
     save_split_metrics_tables,
+    startup_summary_lines,
 )
 from .utils import cycle, ensure_dir, save_json, seed_everything
 
@@ -62,6 +65,118 @@ class AgeDecoupledTrainer:
         ]
         self.device = resolve_device(config.training.device)
 
+    def _reference_frame_for_sensitivity(self, split_name: str) -> pd.DataFrame:
+        frame = self._load_split(split_name)
+        frame = frame.loc[frame["cohort_bucket"] == "ref"].dropna(subset=self.feature_columns)
+        if frame.empty and split_name != "train":
+            frame = self._load_split("train")
+            frame = frame.loc[frame["cohort_bucket"] == "ref"].dropna(subset=self.feature_columns)
+        return frame
+
+    def _age_tensor(self, value_years: float, batch_size: int, device: torch.device) -> torch.Tensor:
+        normalized = normalize_age_years(value_years, self.config)
+        return torch.full((batch_size, self.config.model.age_latent_dim), normalized, device=device, dtype=torch.float32)
+
+    def _latent_sensitivity_batch_metrics(
+        self,
+        model: AgeDecoupledSurrealGAN,
+        reference_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        batch = reference_features.shape[0]
+        baseline_abs = reference_features.abs().clamp_min(1.0)
+        zero_process = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
+        age_low = self._age_tensor(self.config.data.age_latent_normalization_min, batch, reference_features.device)
+        age_high = self._age_tensor(self.config.data.age_latent_normalization_max, batch, reference_features.device)
+        process_anchor_age = self._age_tensor(
+            self.config.training.sensitivity_process_anchor_age,
+            batch,
+            reference_features.device,
+        )
+
+        fake_low_age, _ = model.synthesize(reference_features, age_low, zero_process)
+        fake_high_age, _ = model.synthesize(reference_features, age_high, zero_process)
+        age_sensitivity_pct = ((fake_high_age - fake_low_age).abs() / baseline_abs).mean() * 100.0
+
+        process_responses: list[torch.Tensor] = []
+        process_targets: list[torch.Tensor] = []
+        for idx in range(self.config.model.n_processes):
+            process_latents = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
+            process_latents[:, idx] = 1.0
+            fake_process, _ = model.synthesize(reference_features, process_anchor_age, process_latents)
+            process_targets.append(fake_process)
+            process_responses.append(((fake_process - fake_low_age).abs() / baseline_abs).mean() * 100.0)
+
+        mean_process_sensitivity_pct = (
+            torch.stack(process_responses).mean() if process_responses else torch.tensor(0.0, device=reference_features.device)
+        )
+        pairwise_distances: list[torch.Tensor] = []
+        for i in range(len(process_targets)):
+            for j in range(i + 1, len(process_targets)):
+                pairwise_distances.append(((process_targets[i] - process_targets[j]).abs() / baseline_abs).mean() * 100.0)
+        process_separation_pct = (
+            torch.stack(pairwise_distances).mean()
+            if pairwise_distances
+            else torch.tensor(0.0, device=reference_features.device)
+        )
+        return age_sensitivity_pct, mean_process_sensitivity_pct, process_separation_pct
+
+    @torch.no_grad()
+    def _compute_latent_sensitivity_metrics(self, model: AgeDecoupledSurrealGAN, split_name: str) -> dict[str, Any]:
+        frame = self._reference_frame_for_sensitivity(split_name)
+        if frame.empty:
+            return summarize_latent_sensitivity(
+                age_sensitivity_pct_mean=0.0,
+                process_sensitivity_pct_means={f"r{i + 1}": 0.0 for i in range(self.config.model.n_processes)},
+                process_separation_pct_mean=0.0,
+            )
+
+        sample_n = min(len(frame), self.config.training.sensitivity_eval_subjects)
+        if sample_n < len(frame):
+            frame = frame.sample(sample_n, random_state=self.config.data.split_seed)
+        reference_features = torch.tensor(frame[self.feature_columns].to_numpy(dtype="float32"), device=self.device)
+        batch = reference_features.shape[0]
+        baseline_abs = reference_features.abs().clamp_min(1.0)
+        zero_process = torch.zeros(batch, self.config.model.n_processes, device=self.device)
+        age_low = self._age_tensor(self.config.data.age_latent_normalization_min, batch, self.device)
+        age_high = self._age_tensor(self.config.data.age_latent_normalization_max, batch, self.device)
+        anchor_age = self._age_tensor(self.config.training.sensitivity_process_anchor_age, batch, self.device)
+
+        fake_low_age, _ = model.synthesize(reference_features, age_low, zero_process)
+        fake_high_age, _ = model.synthesize(reference_features, age_high, zero_process)
+        age_sensitivity = float((((fake_high_age - fake_low_age).abs() / baseline_abs).mean() * 100.0).cpu())
+
+        process_metrics: dict[str, float] = {}
+        process_targets: list[torch.Tensor] = []
+        for idx in range(self.config.model.n_processes):
+            process_latents = torch.zeros(batch, self.config.model.n_processes, device=self.device)
+            process_latents[:, idx] = 1.0
+            fake_process, _ = model.synthesize(reference_features, anchor_age, process_latents)
+            process_targets.append(fake_process)
+            process_metrics[f"r{idx + 1}"] = float((((fake_process - fake_low_age).abs() / baseline_abs).mean() * 100.0).cpu())
+
+        pairwise_distances: list[float] = []
+        for i in range(len(process_targets)):
+            for j in range(i + 1, len(process_targets)):
+                value = (((process_targets[i] - process_targets[j]).abs() / baseline_abs).mean() * 100.0).cpu()
+                pairwise_distances.append(float(value))
+        process_separation = float(np.mean(pairwise_distances)) if pairwise_distances else 0.0
+        return summarize_latent_sensitivity(
+            age_sensitivity_pct_mean=age_sensitivity,
+            process_sensitivity_pct_means=process_metrics,
+            process_separation_pct_mean=process_separation,
+        )
+
+    def _checkpoint_epochs(self) -> list[int]:
+        if self.config.training.save_every and self.config.training.save_every > 0:
+            interval = self.config.training.save_every
+        else:
+            target = max(1, self.config.training.target_regular_checkpoints)
+            interval = max(1, -(-self.config.training.epochs // target))
+        epochs = sorted(set(range(interval, self.config.training.epochs + 1, interval)))
+        if self.config.training.epochs not in epochs:
+            epochs.append(self.config.training.epochs)
+        return epochs
+
     def _load_split(self, split_name: str) -> pd.DataFrame:
         return pd.read_csv(self.processed_dir / f"{split_name}.csv", low_memory=False)
 
@@ -79,6 +194,7 @@ class AgeDecoupledTrainer:
             batch_size=self.config.training.batch_size,
             shuffle=shuffle,
             num_workers=self.config.training.num_workers,
+            persistent_workers=self.config.training.persistent_workers and self.config.training.num_workers > 0,
             drop_last=shuffle and len(dataset) > self.config.training.batch_size,
         )
 
@@ -93,9 +209,11 @@ class AgeDecoupledTrainer:
         run_dir: Path,
         repetition_index: int,
         epoch: int,
+        optimizer_g: AdamW | None = None,
+        optimizer_d: AdamW | None = None,
+        scaler: GradScaler | None = None,
         best: bool = False,
     ) -> Path:
-        checkpoint_path = run_dir / f"repetition_{repetition_index:02d}_epoch_{epoch:03d}.pt"
         payload = {
             "model_state": model.state_dict(),
             "epoch": epoch,
@@ -103,13 +221,41 @@ class AgeDecoupledTrainer:
             "feature_columns": self.feature_columns,
             "reference_template": self.reference_template.to_dict(),
             "config": self.config.as_dict(),
+            "optimizer_g_state": optimizer_g.state_dict() if optimizer_g is not None else None,
+            "optimizer_d_state": optimizer_d.state_dict() if optimizer_d is not None else None,
+            "scaler_state": scaler.state_dict() if scaler is not None else None,
         }
-        torch.save(payload, checkpoint_path)
         if best:
             best_path = run_dir / f"repetition_{repetition_index:02d}_best.pt"
             torch.save(payload, best_path)
             return best_path
+        checkpoint_path = run_dir / f"repetition_{repetition_index:02d}_epoch_{epoch:03d}.pt"
+        torch.save(payload, checkpoint_path)
         return checkpoint_path
+
+    def _load_checkpoint_state(
+        self,
+        checkpoint_path: Path,
+        model: AgeDecoupledSurrealGAN,
+        optimizer_g: AdamW | None = None,
+        optimizer_d: AdamW | None = None,
+        scaler: GradScaler | None = None,
+    ) -> int:
+        payload = torch.load(checkpoint_path, map_location=self.device)
+        model.load_state_dict(payload["model_state"])
+        if optimizer_g is not None and payload.get("optimizer_g_state") is not None:
+            optimizer_g.load_state_dict(payload["optimizer_g_state"])
+        if optimizer_d is not None and payload.get("optimizer_d_state") is not None:
+            optimizer_d.load_state_dict(payload["optimizer_d_state"])
+        if scaler is not None and payload.get("scaler_state") is not None:
+            scaler.load_state_dict(payload["scaler_state"])
+        return int(payload.get("epoch", 0))
+
+    def _load_existing_records(self, path: Path) -> list[dict[str, Any]]:
+        if not path.exists():
+            return []
+        frame = pd.read_csv(path)
+        return frame.to_dict(orient="records")
 
     def _predict_split(
         self,
@@ -137,6 +283,12 @@ class AgeDecoupledTrainer:
     def _evaluate_model(self, model: AgeDecoupledSurrealGAN, split_name: str) -> tuple[dict[str, Any], pd.DataFrame]:
         prediction_frame = self._predict_split(model, split_name)
         metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
+        sensitivity_metrics = self._compute_latent_sensitivity_metrics(model, split_name)
+        metrics = {
+            **metrics,
+            **sensitivity_metrics,
+            "quality_score": float(metrics["composite_score"] + 0.25 * sensitivity_metrics["latent_sensitivity_score"]),
+        }
         return metrics, prediction_frame
 
     def _train_epoch(
@@ -203,6 +355,18 @@ class AgeDecoupledTrainer:
                     "process_age_corr": correlation_penalty(outputs.process_latents, tar_age),
                     "process_sparse": latent_sparsity_loss(outputs.process_latents),
                 }
+                sensitivity_reference = ref_x[: min(ref_x.shape[0], 16)]
+                age_sensitivity_pct, process_sensitivity_pct, process_separation_pct = self._latent_sensitivity_batch_metrics(
+                    model,
+                    sensitivity_reference,
+                )
+                losses["age_sensitivity"] = torch.relu(
+                    torch.tensor(self.config.losses.age_sensitivity_target_pct, device=ref_x.device) - age_sensitivity_pct
+                )
+                losses["process_sensitivity"] = torch.relu(
+                    torch.tensor(self.config.losses.process_sensitivity_target_pct, device=ref_x.device)
+                    - process_sensitivity_pct
+                )
                 total_loss = (
                     self.config.losses.adversarial * losses["adv"]
                     + self.config.losses.age_supervision * losses["age_sup"]
@@ -219,6 +383,8 @@ class AgeDecoupledTrainer:
                     + self.config.losses.low_activation_identity * losses["low_identity"]
                     + self.config.losses.process_age_correlation * losses["process_age_corr"]
                     + self.config.losses.process_latent_sparsity * losses["process_sparse"]
+                    + self.config.losses.age_sensitivity * losses["age_sensitivity"]
+                    + self.config.losses.process_sensitivity * losses["process_sensitivity"]
                 )
             optimizer_g.zero_grad(set_to_none=True)
             scaler.scale(total_loss).backward()
@@ -231,6 +397,9 @@ class AgeDecoupledTrainer:
                 "state_age_latent_mean": outputs.age_latent.mean(),
                 "state_process_latent_abs_mean": outputs.process_latents.abs().mean(),
                 "state_fake_change_abs_mean": outputs.fake_delta.abs().mean(),
+                "state_age_sensitivity_pct": age_sensitivity_pct.detach(),
+                "state_process_sensitivity_pct": process_sensitivity_pct.detach(),
+                "state_process_separation_pct": process_separation_pct.detach(),
             }
             step_metrics = {"discriminator": d_loss, "generator_total": total_loss, **losses, **state_metrics}
             for key, value in step_metrics.items():
@@ -238,8 +407,12 @@ class AgeDecoupledTrainer:
 
         return {key: float(sum(values) / max(len(values), 1)) for key, values in metrics.items()}
 
-    def train(self, trial_name: str | None = None) -> dict[str, Any]:
-        run_dir = self._run_dir(trial_name=trial_name)
+    def train(self, trial_name: str | None = None, resume_run_dir: str | None = None) -> dict[str, Any]:
+        configured_resume_dir = (
+            self.config.training.resume_run_dir if getattr(self.config.training, "resume_run_dir", None) else None
+        )
+        active_resume_dir = resume_run_dir or configured_resume_dir or None
+        run_dir = ensure_dir(Path(active_resume_dir)) if active_resume_dir else self._run_dir(trial_name=trial_name)
         ensure_dir(run_dir / "predictions")
         ensure_dir(run_dir / "metrics")
         ensure_dir(run_dir / "tensorboard")
@@ -247,32 +420,90 @@ class AgeDecoupledTrainer:
         ensure_dir(run_dir / "docs")
 
         save_json(run_dir / "resolved_config.json", self.config.as_dict())
+        checkpoint_epochs = self._checkpoint_epochs()
 
-        writer = SummaryWriter(run_dir / "tensorboard") if SummaryWriter is not None else None
+        writer_cls = SummaryWriter if SummaryWriter is not None else None
         repo_root = Path(__file__).resolve().parents[2]
-        if writer is not None:
-            for filename, tag in [
-                ("objectives_and_losses.md", "docs/objectives_and_losses"),
-                ("metrics_and_logging.md", "docs/metrics_and_logging"),
-            ]:
-                text = load_doc_text(repo_root, filename)
-                if text is not None:
-                    writer.add_text(tag, text, 0)
-                    (run_dir / "docs" / filename).write_text(text, encoding="utf-8")
+        doc_payloads: list[tuple[str, str]] = []
+        for filename, tag in [
+            ("objectives_and_losses.md", "docs/objectives_and_losses"),
+            ("metrics_and_logging.md", "docs/metrics_and_logging"),
+        ]:
+            text = load_doc_text(repo_root, filename)
+            if text is not None:
+                doc_payloads.append((tag, text))
+                (run_dir / "docs" / filename).write_text(text, encoding="utf-8")
 
         reference_loader = self._cohort_loader("train", "ref", shuffle=True)
         target_loader = self._cohort_loader("train", "tar", shuffle=True)
 
+        repetition_summaries = self._load_existing_records(run_dir / "metrics" / "repetition_summary.csv")
+        epoch_history_records = self._load_existing_records(run_dir / "metrics" / "epoch_history.csv")
+        repetition_summaries = [
+            {
+                "repetition_index": int(row["repetition_index"]),
+                "best_checkpoint": row["best_checkpoint"],
+                "best_score": float(row["best_score"]),
+            }
+            for row in repetition_summaries
+        ]
         repetition_val_paths: list[Path] = []
-        repetition_summaries: list[dict[str, Any]] = []
-        epoch_history_records: list[dict[str, Any]] = []
+        for row in repetition_summaries:
+            val_path = run_dir / "predictions" / f"repetition_{int(row['repetition_index']):02d}_val.csv"
+            if val_path.exists():
+                repetition_val_paths.append(val_path)
         log_path = run_dir / "logs" / "train.log"
+        startup_lines = startup_summary_lines(
+            experiment_name=self.config.experiment_name if trial_name is None else trial_name,
+            config_path=str(
+                Path(self.config_path).expanduser().resolve() if self.config_path else default_config_path().resolve()
+            ),
+            device=str(self.device),
+            n_features=self.n_features,
+            n_processes=self.config.model.n_processes,
+            repetitions=self.config.training.repetitions,
+            epochs=self.config.training.epochs,
+            batch_size=self.config.training.batch_size,
+            learning_rate=self.config.training.learning_rate,
+            discriminator_learning_rate=self.config.training.discriminator_learning_rate,
+            checkpoint_epochs=checkpoint_epochs,
+            num_workers=self.config.training.num_workers,
+            persistent_workers=self.config.training.persistent_workers,
+            use_amp=self.config.training.use_amp,
+            compile_model=self.config.training.compile_model,
+            encoder_hidden_dims=self.config.model.encoder_hidden_dims,
+            generator_hidden_dims=self.config.model.generator_hidden_dims,
+            discriminator_hidden_dims=self.config.model.discriminator_hidden_dims,
+            decomposer_hidden_dims=self.config.model.decomposer_hidden_dims,
+        )
+        if active_resume_dir:
+            resume_line = f"Resume mode: {Path(active_resume_dir).resolve()}"
+            startup_lines.append(resume_line)
+        for line in startup_lines:
+            print(line)
+            append_log_line(log_path, line)
 
+        completed_repetitions = {int(row["repetition_index"]) for row in repetition_summaries}
         for repetition_index in range(self.config.training.repetitions):
+            if repetition_index in completed_repetitions:
+                skip_line = f"Skipping completed repetition {repetition_index + 1}/{self.config.training.repetitions}"
+                print(skip_line)
+                append_log_line(log_path, skip_line)
+                continue
             seed_everything(self.config.data.split_seed + repetition_index)
             model = AgeDecoupledSurrealGAN(self.n_features, self.config).to(self.device)
-            if self.config.training.compile_model and hasattr(torch, "compile"):
-                model = torch.compile(model)  # type: ignore[assignment]
+            writer = (
+                writer_cls(run_dir / "tensorboard" / f"repetition_{repetition_index:02d}")
+                if writer_cls is not None
+                else None
+            )
+            if writer is not None:
+                writer.add_text("run/summary", "\n".join(startup_lines), 0)
+                for tag, text in doc_payloads:
+                    writer.add_text(tag, text, 0)
+            rep_line = f"Starting repetition {repetition_index + 1}/{self.config.training.repetitions}"
+            print(rep_line)
+            append_log_line(log_path, rep_line)
 
             optimizer_g = AdamW(
                 list(model.encoder.parameters())
@@ -290,13 +521,36 @@ class AgeDecoupledTrainer:
                 weight_decay=self.config.training.weight_decay,
             )
             scaler = GradScaler('cuda', enabled=self.config.training.use_amp and self.device.type == "cuda")
-
-            best_score = float("-inf")
-            best_checkpoint: Path | None = None
+            start_epoch = 1
+            existing_checkpoints = sorted(run_dir.glob(f"repetition_{repetition_index:02d}_epoch_*.pt"))
+            best_checkpoint = run_dir / f"repetition_{repetition_index:02d}_best.pt"
+            existing_rows = [
+                row for row in epoch_history_records if int(row.get("repetition_index", -1)) == repetition_index
+            ]
+            best_score = max((float(row["selection_score"]) for row in existing_rows), default=float("-inf"))
             best_val_frame: pd.DataFrame | None = None
             best_val_metrics: dict[str, Any] | None = None
+            if existing_checkpoints:
+                latest_checkpoint = max(existing_checkpoints, key=lambda path: int(path.stem.split("_")[-1]))
+                start_epoch = self._load_checkpoint_state(latest_checkpoint, model, optimizer_g, optimizer_d, scaler) + 1
+                epoch_history_records = [
+                    row
+                    for row in epoch_history_records
+                    if not (
+                        int(row.get("repetition_index", -1)) == repetition_index
+                        and int(row.get("epoch", -1)) >= start_epoch
+                    )
+                ]
+                resume_rep_line = (
+                    f"Resuming repetition {repetition_index + 1}/{self.config.training.repetitions} "
+                    f"from {latest_checkpoint.name} at epoch {start_epoch}"
+                )
+                print(resume_rep_line)
+                append_log_line(log_path, resume_rep_line)
+            if self.config.training.compile_model and hasattr(torch, "compile"):
+                model = torch.compile(model)  # type: ignore[assignment]
 
-            for epoch in range(1, self.config.training.epochs + 1):
+            for epoch in range(start_epoch, self.config.training.epochs + 1):
                 train_metrics = self._train_epoch(model, reference_loader, target_loader, optimizer_g, optimizer_d, scaler)
                 val_metrics, val_frame = self._evaluate_model(model, "val")
                 score = float(val_metrics[self.config.training.monitor_metric])
@@ -324,21 +578,46 @@ class AgeDecoupledTrainer:
 
                 if writer is not None:
                     for key, value in train_metrics.items():
-                        tag = TRAIN_TENSORBOARD_TAGS.get(key, f"train/repetition_{repetition_index}/{key}")
-                        writer.add_scalar(f"{tag}/repetition_{repetition_index}", value, epoch)
+                        tag = TRAIN_TENSORBOARD_TAGS.get(key, f"train/{key}")
+                        writer.add_scalar(tag, value, epoch)
                     for key, value in val_metrics.items():
                         if isinstance(value, (float, int)):
                             tag = VAL_TENSORBOARD_TAGS.get(key, f"metric/validation/{key}")
-                            writer.add_scalar(f"{tag}/repetition_{repetition_index}", value, epoch)
+                            writer.add_scalar(tag, float(value), epoch)
 
-                if epoch % self.config.training.save_every == 0:
-                    self._save_checkpoint(model, run_dir, repetition_index, epoch)
+                if epoch in checkpoint_epochs:
+                    self._save_checkpoint(
+                        model,
+                        run_dir,
+                        repetition_index,
+                        epoch,
+                        optimizer_g=optimizer_g,
+                        optimizer_d=optimizer_d,
+                        scaler=scaler,
+                    )
 
                 if score > best_score:
                     best_score = score
-                    best_checkpoint = self._save_checkpoint(model, run_dir, repetition_index, epoch, best=True)
+                    best_checkpoint = self._save_checkpoint(
+                        model,
+                        run_dir,
+                        repetition_index,
+                        epoch,
+                        optimizer_g=optimizer_g,
+                        optimizer_d=optimizer_d,
+                        scaler=scaler,
+                        best=True,
+                    )
                     best_val_frame = val_frame
                     best_val_metrics = val_metrics
+
+            if best_checkpoint.exists() and (best_val_frame is None or best_val_metrics is None):
+                best_model = AgeDecoupledSurrealGAN(self.n_features, self.config).to(self.device)
+                self._load_checkpoint_state(best_checkpoint, best_model)
+                if self.config.training.compile_model and hasattr(torch, "compile"):
+                    best_model = torch.compile(best_model)  # type: ignore[assignment]
+                best_model.eval()
+                best_val_metrics, best_val_frame = self._evaluate_model(best_model, "val")
 
             assert best_checkpoint is not None
             assert best_val_frame is not None
@@ -346,7 +625,12 @@ class AgeDecoupledTrainer:
             val_prediction_path = run_dir / "predictions" / f"repetition_{repetition_index:02d}_val.csv"
             save_prediction_frame(best_val_frame, val_prediction_path)
             save_metrics(best_val_metrics, run_dir / "metrics" / f"repetition_{repetition_index:02d}_val.json")
-            repetition_val_paths.append(val_prediction_path)
+            repetition_val_paths = [
+                path for path in repetition_val_paths if path.name != val_prediction_path.name
+            ] + [val_prediction_path]
+            repetition_summaries = [
+                row for row in repetition_summaries if int(row["repetition_index"]) != repetition_index
+            ]
             repetition_summaries.append(
                 {
                     "repetition_index": repetition_index,
@@ -354,7 +638,11 @@ class AgeDecoupledTrainer:
                     "best_score": best_score,
                 }
             )
+            if writer is not None:
+                writer.close()
 
+        repetition_summaries = sorted(repetition_summaries, key=lambda row: int(row["repetition_index"]))
+        repetition_val_paths = sorted(repetition_val_paths, key=lambda path: path.name)
         save_records_csv(run_dir / "metrics" / "epoch_history.csv", epoch_history_records)
         save_jsonl(run_dir / "logs" / "epoch_history.jsonl", epoch_history_records)
         save_records_csv(run_dir / "metrics" / "repetition_summary.csv", repetition_summaries)
@@ -374,6 +662,12 @@ class AgeDecoupledTrainer:
             prediction_path = run_dir / "predictions" / f"{split_name}.csv"
             save_prediction_frame(prediction_frame, prediction_path)
             metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
+            sensitivity_metrics = self._compute_latent_sensitivity_metrics(best_model, split_name)
+            metrics = {
+                **metrics,
+                **sensitivity_metrics,
+                "quality_score": float(metrics["composite_score"] + 0.25 * sensitivity_metrics["latent_sensitivity_score"]),
+            }
             split_metrics[split_name] = metrics
             save_metrics(metrics, run_dir / "metrics" / f"{split_name}.json")
 
@@ -388,6 +682,4 @@ class AgeDecoupledTrainer:
         save_json(run_dir / "run_summary.json", summary)
         save_split_metrics_tables(split_metrics, run_dir / "metrics")
         save_run_markdown_summary(summary, run_dir / "metrics" / "run_summary.md")
-        if writer is not None:
-            writer.close()
         return summary

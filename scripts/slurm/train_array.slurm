@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=age_surrealgan_array
-#SBATCH --partition=ai
+#SBATCH --partition=all
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:a100:1
-#SBATCH --mem=160G
+#SBATCH --gres=gpu:v100:1
+#SBATCH --mem=32G
 #SBATCH --time=2-00:00:00
 #SBATCH --output=slurm_logs/%x-%A_%a.out
 

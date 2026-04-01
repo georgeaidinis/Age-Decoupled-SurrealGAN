@@ -1,0 +1,53 @@
+experiment_name = "age-decoupled-surrealgan-overnight-train"
+
+[model]
+n_processes = 5
+encoder_hidden_dims = [640, 320]
+generator_hidden_dims = [640, 640, 320]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [640, 320]
+dropout = 0.05
+
+[training]
+repetitions = 4
+epochs = 180
+batch_size = 96
+learning_rate = 0.00015
+discriminator_learning_rate = 0.00007
+weight_decay = 0.0001
+gradient_clip_norm = 5.0
+num_workers = 2
+persistent_workers = true
+use_amp = true
+compile_model = false
+device = "auto"
+save_every = 0
+target_regular_checkpoints = 6
+console_log_every = 1
+monitor_split = "val"
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 128
+sensitivity_process_anchor_age = 20.0
+resume_run_dir = ""
+
+[losses]
+adversarial = 1.5
+age_supervision = 5.0
+reference_age_supervision = 2.5
+age_adversary = 1.0
+latent_reconstruction = 1.25
+decomposition = 1.25
+identity = 2.0
+monotonicity = 0.35
+process_orthogonality = 0.25
+age_process_covariance = 0.5
+reference_process_sparsity = 0.1
+change_magnitude = 0.0
+low_activation_identity = 0.1
+process_age_correlation = 0.0
+process_latent_sparsity = 0.0
+low_activation_max = 0.05
+age_sensitivity = 1.5
+process_sensitivity = 1.0
+age_sensitivity_target_pct = 0.20
+process_sensitivity_target_pct = 0.10

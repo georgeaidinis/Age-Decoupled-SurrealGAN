@@ -27,9 +27,14 @@ TRAIN_TENSORBOARD_TAGS = {
     "low_identity": "loss/ablation/low_activation_identity",
     "process_age_corr": "loss/ablation/process_age_correlation",
     "process_sparse": "loss/ablation/process_latent_sparsity",
+    "age_sensitivity": "loss/generator/age_sensitivity_margin",
+    "process_sensitivity": "loss/generator/process_sensitivity_margin",
     "state_age_latent_mean": "state/latents/age_mean",
     "state_process_latent_abs_mean": "state/latents/process_abs_mean",
     "state_fake_change_abs_mean": "state/change/fake_abs_mean",
+    "state_age_sensitivity_pct": "state/sensitivity/age_pct",
+    "state_process_sensitivity_pct": "state/sensitivity/process_pct",
+    "state_process_separation_pct": "state/sensitivity/process_separation_pct",
 }
 
 
@@ -37,7 +42,12 @@ VAL_TENSORBOARD_TAGS = {
     "age_latent_age_correlation": "metric/validation/age_latent_age_correlation",
     "mean_absolute_process_age_correlation": "metric/validation/process_age_abs_mean",
     "mean_absolute_residual_process_age_correlation": "metric/validation/process_age_residual_abs_mean",
+    "age_sensitivity_pct_mean": "metric/validation/age_sensitivity_pct_mean",
+    "mean_process_sensitivity_pct_mean": "metric/validation/process_sensitivity_pct_mean",
+    "process_separation_pct_mean": "metric/validation/process_separation_pct_mean",
+    "latent_sensitivity_score": "metric/validation/latent_sensitivity_score",
     "composite_score": "selection/validation/composite_score",
+    "quality_score": "selection/validation/quality_score",
 }
 
 
@@ -82,6 +92,8 @@ def epoch_log_line(
         f"age={train_metrics['age_sup']:.4f} "
         f"decomp={train_metrics['decompose']:.4f} "
         f"val: comp={val_metrics['composite_score']:.4f} "
+        f"qual={val_metrics.get('quality_score', val_metrics['composite_score']):.4f} "
+        f"sens={val_metrics.get('latent_sensitivity_score', 0.0):.4f} "
         f"age_corr={val_metrics['age_latent_age_correlation']:.4f} "
         f"resid_age={val_metrics['mean_absolute_residual_process_age_correlation']:.4f}"
     )
@@ -92,6 +104,49 @@ def append_log_line(path: Path, line: str) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line)
         handle.write("\n")
+
+
+def startup_summary_lines(
+    *,
+    experiment_name: str,
+    config_path: str,
+    device: str,
+    n_features: int,
+    n_processes: int,
+    repetitions: int,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    discriminator_learning_rate: float,
+    checkpoint_epochs: list[int],
+    num_workers: int,
+    persistent_workers: bool,
+    use_amp: bool,
+    compile_model: bool,
+    encoder_hidden_dims: list[int],
+    generator_hidden_dims: list[int],
+    discriminator_hidden_dims: list[int],
+    decomposer_hidden_dims: list[int],
+) -> list[str]:
+    return [
+        f"Experiment: {experiment_name}",
+        f"Config: {config_path}",
+        f"Device: {device}",
+        (
+            f"Run setup: repetitions={repetitions}, epochs={epochs}, batch_size={batch_size}, "
+            f"lr={learning_rate:.2e}, d_lr={discriminator_learning_rate:.2e}"
+        ),
+        (
+            f"Runtime: num_workers={num_workers}, persistent_workers={persistent_workers}, "
+            f"use_amp={use_amp}, compile_model={compile_model}"
+        ),
+        (
+            f"Architecture: n_features={n_features}, n_processes={n_processes}, "
+            f"encoder={encoder_hidden_dims}, generator={generator_hidden_dims}, "
+            f"discriminator={discriminator_hidden_dims}, decomposer={decomposer_hidden_dims}"
+        ),
+        f"Checkpoint epochs: {checkpoint_epochs} plus best-per-repetition checkpoint",
+    ]
 
 
 def save_split_metrics_tables(split_metrics: dict[str, dict[str, Any]], output_dir: Path) -> None:
@@ -125,9 +180,12 @@ def save_run_markdown_summary(summary: dict[str, Any], output_path: Path) -> Non
                 f"### {split_name}",
                 "",
                 f"- Composite score: `{metrics['composite_score']:.4f}`",
+                f"- Quality score: `{metrics.get('quality_score', metrics['composite_score']):.4f}`",
                 f"- Age latent vs age correlation: `{metrics['age_latent_age_correlation']:.4f}`",
                 f"- Mean absolute process-age correlation: `{metrics['mean_absolute_process_age_correlation']:.4f}`",
                 f"- Mean absolute residual process-age correlation: `{metrics['mean_absolute_residual_process_age_correlation']:.4f}`",
+                f"- Age sensitivity (% mean): `{metrics.get('age_sensitivity_pct_mean', 0.0):.4f}`",
+                f"- Mean process sensitivity (% mean): `{metrics.get('mean_process_sensitivity_pct_mean', 0.0):.4f}`",
                 "",
             ]
         )

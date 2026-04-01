@@ -24,7 +24,7 @@ input {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -33,12 +33,18 @@ input {
   border-right: 1px solid rgba(20, 36, 50, 0.08);
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(14px);
+  min-width: 0;
 }
 
 .content {
   padding: 24px;
   display: grid;
   gap: 20px;
+}
+
+.fallback-shell {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 24px;
 }
 
 .brand-block h1 {
@@ -61,6 +67,9 @@ input {
 }
 
 .control-group select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(20, 36, 50, 0.12);
@@ -160,10 +169,25 @@ input {
   font-weight: 600;
 }
 
-.brain-canvas {
+.brain-panel {
+  overflow: hidden;
+}
+
+.brain-canvas-shell {
   width: 100%;
-  min-height: 420px;
+  height: 520px;
+  min-height: 520px;
+  max-height: 520px;
+  overflow: hidden;
   border-radius: 18px;
+  background: #0d1b24;
+}
+
+.brain-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
   background: #0d1b24;
 }
 
@@ -181,13 +205,72 @@ input {
   background: linear-gradient(160deg, rgba(123, 196, 160, 0.12), rgba(31, 111, 139, 0.08));
 }
 
+.slider-card-wide {
+  grid-column: 1 / -1;
+}
+
 .slider-card strong {
   font-size: 1.1rem;
+}
+
+.generate-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.generate-button {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, #1f6f8b, #4e8da2);
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.generate-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .chart-wrap {
   width: 100%;
   height: 320px;
+}
+
+.empty-chart-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: rgba(20, 36, 50, 0.72);
+  background: rgba(20, 36, 50, 0.04);
+  border-radius: 18px;
+}
+
+.debug-block {
+  margin: 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(20, 36, 50, 0.06);
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.status-panel,
+.inline-error {
+  border: 1px solid rgba(170, 54, 54, 0.12);
+  background: rgba(255, 248, 246, 0.92);
+}
+
+.inline-error {
+  padding: 14px;
+  border-radius: 16px;
+  color: #8c2f39;
 }
 
 @media (max-width: 1100px) {
@@ -197,5 +280,11 @@ input {
 
   .hero-grid {
     grid-template-columns: 1fr;
+  }
+
+  .brain-canvas-shell {
+    height: 420px;
+    min-height: 420px;
+    max-height: 420px;
   }
 }

@@ -122,3 +122,24 @@ def compute_age_metrics(prediction_frame: pd.DataFrame, n_processes: int) -> dic
         "mean_absolute_residual_process_age_correlation": mean_abs_residual,
         "composite_score": composite,
     }
+
+
+def summarize_latent_sensitivity(
+    *,
+    age_sensitivity_pct_mean: float,
+    process_sensitivity_pct_means: dict[str, float],
+    process_separation_pct_mean: float,
+) -> dict[str, Any]:
+    mean_process_sensitivity = float(np.mean(list(process_sensitivity_pct_means.values()))) if process_sensitivity_pct_means else 0.0
+    quality = float(
+        np.log1p(max(age_sensitivity_pct_mean, 0.0))
+        + np.log1p(max(mean_process_sensitivity, 0.0))
+        + 0.5 * np.log1p(max(process_separation_pct_mean, 0.0))
+    )
+    return {
+        "age_sensitivity_pct_mean": float(age_sensitivity_pct_mean),
+        "process_sensitivity_pct_means": process_sensitivity_pct_means,
+        "mean_process_sensitivity_pct_mean": mean_process_sensitivity,
+        "process_separation_pct_mean": float(process_separation_pct_mean),
+        "latent_sensitivity_score": quality,
+    }

@@ -16,7 +16,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("prepare-data", help="Prepare processed data artifacts and split manifests")
-    subparsers.add_parser("train", help="Run model training")
+    train_parser = subparsers.add_parser("train", help="Run model training")
+    train_parser.add_argument(
+        "--resume-run-dir",
+        type=str,
+        default=None,
+        help="Resume an interrupted training run from an existing run directory.",
+    )
     subparsers.add_parser("tune", help="Run Optuna tuning")
     subparsers.add_parser("serve", help="Start the FastAPI backend")
     return parser
@@ -33,7 +39,7 @@ def main() -> None:
         return
 
     if args.command == "train":
-        summary = AgeDecoupledTrainer(config, config_path=args.config).train()
+        summary = AgeDecoupledTrainer(config, config_path=args.config).train(resume_run_dir=args.resume_run_dir)
         print(f"Training completed. Selected checkpoint: {summary['selected_checkpoint']}")
         return
 

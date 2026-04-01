@@ -68,14 +68,19 @@ class TrainingConfig:
     weight_decay: float = 1.0e-4
     gradient_clip_norm: float = 5.0
     num_workers: int = 0
+    persistent_workers: bool = False
     use_amp: bool = True
     compile_model: bool = False
     device: str = "auto"
-    save_every: int = 5
+    save_every: int = 0
+    target_regular_checkpoints: int = 5
     log_every: int = 10
     console_log_every: int = 1
     monitor_split: str = "val"
     monitor_metric: str = "composite_score"
+    sensitivity_eval_subjects: int = 64
+    sensitivity_process_anchor_age: float = 20.0
+    resume_run_dir: str | None = None
 
 
 @dataclass
@@ -96,6 +101,10 @@ class LossConfig:
     process_age_correlation: float = 0.0
     process_latent_sparsity: float = 0.0
     low_activation_max: float = 0.05
+    age_sensitivity: float = 0.0
+    process_sensitivity: float = 0.0
+    age_sensitivity_target_pct: float = 0.25
+    process_sensitivity_target_pct: float = 0.10
 
 
 @dataclass
@@ -103,6 +112,10 @@ class TuningConfig:
     enabled: bool = True
     trials: int = 20
     timeout_seconds: int | None = None
+    study_name: str = "age_decoupled_surrealgan"
+    storage: str = "sqlite:///runs/optuna_age_decoupled_surrealgan.db"
+    resume_if_exists: bool = True
+    objective_metric: str = "quality_score"
 
 
 @dataclass

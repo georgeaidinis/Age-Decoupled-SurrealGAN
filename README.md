@@ -134,6 +134,14 @@ Run Optuna tuning:
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli tune
 ```
 
+Resume an interrupted training run:
+
+```bash
+PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
+  --config path/to/config.toml \
+  train --resume-run-dir runs/<existing_run_dir>
+```
+
 Start the API:
 
 ```bash
@@ -152,8 +160,8 @@ Important config sections:
 - `data`: cohort thresholds, holdout study, split seed, and the atomic-ROI cutoff `max_atomic_roi_id = 299`
 - `model`: number of process latents and hidden widths
 - `training`: epochs, repetitions, batch size, device, checkpoint cadence
-- `losses`: weighting for age supervision, age adversary, decomposition, identity, covariance, orthogonality
-- `tuning`: Optuna trial count
+- `losses`: weighting for age supervision, age adversary, decomposition, identity, covariance, orthogonality, and latent-sensitivity margins
+- `tuning`: Optuna trial count, study storage, and resume behavior
 - `app`: API host/port
 
 ## Training outputs
@@ -163,7 +171,7 @@ Each training run writes a timestamped directory under [`runs/`](runs) with:
 - `resolved_config.json`
 - `run_summary.json`
 - `metrics/run_summary.md`
-- per-repetition checkpoints
+- regular checkpoints at an automatically spaced cadence plus a best checkpoint per repetition
 - split-level latent prediction CSVs
 - split-level metrics JSONs
 - `metrics/split_metrics.csv`
@@ -179,7 +187,9 @@ Each training run writes a timestamped directory under [`runs/`](runs) with:
 - mean agreement across repetitions
 - per-split metrics for `train`, `val`, `id_test`, `ood_test`, and `application`
 
-TensorBoard groups scalars by objective family and validation metric family, and embeds the objective and metric explainers directly under `docs/*`.
+The web GUI uses the `selected_checkpoint` recorded in `run_summary.json` for the chosen run.
+
+TensorBoard groups scalars by objective family and validation metric family. Each repetition is written as its own TensorBoard run under `tensorboard/repetition_*`, which keeps one consistent color per repetition across all metrics while avoiding one subrun per metric. The objective and metric explainers are embedded directly into each repetition run under `docs/*`.
 
 ## Web GUI
 
@@ -204,6 +214,8 @@ The Niivue dependency is installed from the scoped npm package `@niivue/niivue`.
 
 You will typically run the API on `127.0.0.1:8000` and the UI on `127.0.0.1:5173`.
 
+The Vite dev server is configured to proxy `/runs`, `/infer`, `/atlas`, and `/health` to `127.0.0.1:8000`. If you change the API host or port, either update [`webui/vite.config.ts`](webui/vite.config.ts) or set `VITE_API_BASE_URL`.
+
 ## SLURM
 
 Example SLURM scripts for CUBIC-style cluster usage are provided in [`scripts/slurm/`](scripts/slurm):
@@ -212,6 +224,12 @@ Example SLURM scripts for CUBIC-style cluster usage are provided in [`scripts/sl
 - [`scripts/slurm/train.slurm`](scripts/slurm/train.slurm)
 - [`scripts/slurm/tune.slurm`](scripts/slurm/tune.slurm)
 - [`scripts/slurm/train_array.slurm`](scripts/slurm/train_array.slurm)
+
+For local overnight experiments, the repository also includes:
+
+- [`src/age_decoupled_surrealgan/configs/overnight_train.toml`](src/age_decoupled_surrealgan/configs/overnight_train.toml)
+- [`src/age_decoupled_surrealgan/configs/overnight_tune.toml`](src/age_decoupled_surrealgan/configs/overnight_tune.toml)
+- [`scripts/run_overnight_laptop.sh`](scripts/run_overnight_laptop.sh)
 
 ## Code layout
 
