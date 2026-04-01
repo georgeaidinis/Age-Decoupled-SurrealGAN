@@ -1,0 +1,4 @@
+experiment_name = "age-decoupled-surrealgan-change-magnitude"
+
+[losses]
+change_magnitude = 0.05

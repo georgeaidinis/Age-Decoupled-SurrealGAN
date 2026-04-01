@@ -1,0 +1,4 @@
+experiment_name = "age-decoupled-surrealgan-process-age-correlation"
+
+[losses]
+process_age_correlation = 0.25

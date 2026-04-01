@@ -1,0 +1,83 @@
+experiment_name = "age-decoupled-surrealgan"
+
+[paths]
+raw_dataset = "datasets/cleaned_istaging.csv"
+muse_roi_json = "datasets/MUSE_ROI_complete_list.json"
+atlas_image = "datasets/atlas.nii.gz"
+atlas_segmentation = "datasets/atlas_segmentation.nii.gz"
+processed_dir = "artifacts/data/processed"
+runs_dir = "runs"
+notebook_dir = "output/jupyter-notebook"
+
+[data]
+subject_id_column = "PTID"
+study_column = "Study"
+age_column = "Age"
+diagnosis_column = "Diagnosis"
+sex_column = "Sex"
+roi_prefix = "MUSE_Volume_"
+max_atomic_roi_id = 299
+ref_min_age = 20
+ref_max_age = 49
+tar_min_age = 50
+tar_max_age = 97
+holdout_study = "HANDLS"
+val_fraction = 0.10
+id_test_fraction = 0.10
+split_seed = 17
+age_latent_normalization_min = 20
+age_latent_normalization_max = 97
+
+[model]
+n_processes = 5
+age_latent_dim = 1
+encoder_hidden_dims = [512, 256]
+generator_hidden_dims = [512, 512, 256]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [512, 256]
+dropout = 0.10
+
+[training]
+repetitions = 3
+epochs = 50
+batch_size = 64
+learning_rate = 0.0002
+discriminator_learning_rate = 0.0001
+weight_decay = 0.0001
+gradient_clip_norm = 5.0
+num_workers = 0
+use_amp = true
+compile_model = false
+device = "auto"
+save_every = 5
+log_every = 10
+console_log_every = 1
+monitor_split = "val"
+monitor_metric = "composite_score"
+
+[losses]
+adversarial = 1.0
+age_supervision = 4.0
+reference_age_supervision = 2.0
+age_adversary = 1.0
+latent_reconstruction = 1.0
+decomposition = 1.0
+identity = 4.0
+monotonicity = 0.5
+process_orthogonality = 0.2
+age_process_covariance = 0.4
+reference_process_sparsity = 0.2
+change_magnitude = 0.0
+low_activation_identity = 0.0
+process_age_correlation = 0.0
+process_latent_sparsity = 0.0
+low_activation_max = 0.05
+
+[tuning]
+enabled = true
+trials = 20
+
+[app]
+api_host = "127.0.0.1"
+api_port = 8000
+allow_origin = "*"

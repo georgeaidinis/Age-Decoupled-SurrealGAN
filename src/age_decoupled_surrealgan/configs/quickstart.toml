@@ -1,0 +1,11 @@
+experiment_name = "age-decoupled-surrealgan-quickstart"
+
+[training]
+repetitions = 1
+epochs = 5
+batch_size = 64
+save_every = 1
+console_log_every = 1
+
+[model]
+n_processes = 3

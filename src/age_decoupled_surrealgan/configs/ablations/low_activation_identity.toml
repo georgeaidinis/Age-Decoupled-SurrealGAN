@@ -1,0 +1,4 @@
+experiment_name = "age-decoupled-surrealgan-low-activation-identity"
+
+[losses]
+low_activation_identity = 1.0

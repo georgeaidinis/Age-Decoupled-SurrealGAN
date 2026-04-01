@@ -135,3 +135,18 @@ dmypy.json
 *.csv
 !datasets/sample_data_ground_truth.csv
 !datasets/sample_roi.csv
+
+# Raw data
+*.nii.gz
+!datasets/atlas.nii.gz
+!datasets/atlas_segmentation.nii.gz
+
+# Project outputs
+artifacts/
+runs/
+webui/node_modules/
+webui/dist/
+slurm_logs/
+
+# CUBIC cluster information:
+/scripts/cluster_notes.txt
