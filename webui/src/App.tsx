@@ -30,6 +30,9 @@ export function App() {
   const [ageYears, setAgeYears] = useState(20);
   const [processLatents, setProcessLatents] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<"slices" | "volume">("slices");
+  const [overlayScaleMode, setOverlayScaleMode] = useState<"relative" | "absolute">("relative");
+  const [overlayOpacity, setOverlayOpacity] = useState(0.38);
+  const [absoluteOverlayScale, setAbsoluteOverlayScale] = useState(1.0);
   const [atlasUrls, setAtlasUrls] = useState<{ atlas_image_url: string } | null>(null);
   const [overlayImageUrl, setOverlayImageUrl] = useState<string | null>(null);
   const [loadingDefaults, setLoadingDefaults] = useState(false);
@@ -190,11 +193,29 @@ export function App() {
   const overlayAbsMax = useMemo(() => {
     const values = inference?.inference.percent_change ?? [];
     const maxValue = values.reduce((current, value) => Math.max(current, Math.abs(value)), 0);
-    return Math.max(maxValue, 1);
-  }, [inference]);
+    if (overlayScaleMode === "relative") {
+      return Math.max(maxValue, 1e-4);
+    }
+    return Math.max(absoluteOverlayScale, 1e-4);
+  }, [absoluteOverlayScale, inference, overlayScaleMode]);
 
   const currentMetadata = inference?.metadata ?? subjectMetadata ?? {};
   const controlsDisabled = !selectedRun || selectedRow === null || loadingDefaults || loadingInference;
+  const formatMetadataValue = (key: string, value: string | number | null) => {
+    if (value === null || value === undefined || value === "") {
+      return "";
+    }
+    if (typeof value === "number") {
+      if (key.toLowerCase() === "age") {
+        return value.toFixed(2);
+      }
+      if (Number.isInteger(value)) {
+        return String(value);
+      }
+      return value.toFixed(3);
+    }
+    return String(value);
+  };
 
   return (
     <main className="app-shell">
@@ -263,6 +284,58 @@ export function App() {
             </button>
           </div>
         </div>
+
+        <div className="control-group">
+          <label>Overlay scaling</label>
+          <div className="segmented-control">
+            <button
+              className={overlayScaleMode === "relative" ? "active" : ""}
+              type="button"
+              onClick={() => setOverlayScaleMode("relative")}
+            >
+              Relative
+            </button>
+            <button
+              className={overlayScaleMode === "absolute" ? "active" : ""}
+              type="button"
+              onClick={() => setOverlayScaleMode("absolute")}
+            >
+              Absolute
+            </button>
+          </div>
+          <p className="control-help">
+            Relative rescales each generated overlay to its own max change. Absolute preserves a fixed percent scale so
+            runs are comparable.
+          </p>
+        </div>
+
+        {overlayScaleMode === "absolute" ? (
+          <div className="control-group">
+            <label>Absolute overlay range</label>
+            <input
+              type="range"
+              min={0.1}
+              max={10}
+              step={0.1}
+              value={absoluteOverlayScale}
+              onChange={(event) => setAbsoluteOverlayScale(Number(event.target.value))}
+            />
+            <p className="control-help">Clip the blue/red overlay at ±{absoluteOverlayScale.toFixed(1)}% change.</p>
+          </div>
+        ) : null}
+
+        <div className="control-group">
+          <label>Overlay opacity</label>
+          <input
+            type="range"
+            min={0.05}
+            max={0.75}
+            step={0.01}
+            value={overlayOpacity}
+            onChange={(event) => setOverlayOpacity(Number(event.target.value))}
+          />
+          <p className="control-help">Current opacity: {overlayOpacity.toFixed(2)}</p>
+        </div>
       </aside>
 
       <section className="content">
@@ -287,7 +360,7 @@ export function App() {
             <div className="metric-row">
               <div>
                 <span>Requested age</span>
-                <strong>{ageYears.toFixed(0)} y</strong>
+                <strong>{ageYears.toFixed(2)} y</strong>
               </div>
               <div>
                 <span>Processes</span>
@@ -298,7 +371,7 @@ export function App() {
               {Object.entries(currentMetadata).map(([key, value]) => (
                 <div key={key}>
                   <dt>{key}</dt>
-                  <dd>{String(value ?? "")}</dd>
+                  <dd>{formatMetadataValue(key, value)}</dd>
                 </div>
               ))}
             </dl>
@@ -309,6 +382,7 @@ export function App() {
               atlasImageUrl={atlasUrls.atlas_image_url}
               overlayImageUrl={overlayImageUrl}
               overlayAbsMax={overlayAbsMax}
+              overlayOpacity={overlayOpacity}
               mode={viewMode}
             />
           ) : null}

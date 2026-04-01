@@ -225,10 +225,11 @@ Example SLURM scripts for CUBIC-style cluster usage are provided in [`scripts/sl
 - [`scripts/slurm/tune.slurm`](scripts/slurm/tune.slurm)
 - [`scripts/slurm/train_array.slurm`](scripts/slurm/train_array.slurm)
 
-For local overnight experiments, the repository also includes:
+For longer local experiments, the repository also includes:
 
-- [`src/age_decoupled_surrealgan/configs/overnight_train.toml`](src/age_decoupled_surrealgan/configs/overnight_train.toml)
-- [`src/age_decoupled_surrealgan/configs/overnight_tune.toml`](src/age_decoupled_surrealgan/configs/overnight_tune.toml)
+- [`src/age_decoupled_surrealgan/configs/extended_train.toml`](src/age_decoupled_surrealgan/configs/extended_train.toml)
+- [`src/age_decoupled_surrealgan/configs/extended_tune.toml`](src/age_decoupled_surrealgan/configs/extended_tune.toml)
+- [`scripts/run_laptop_experiments.sh`](scripts/run_laptop_experiments.sh)
 - [`scripts/run_overnight_laptop.sh`](scripts/run_overnight_laptop.sh)
 
 ## Code layout

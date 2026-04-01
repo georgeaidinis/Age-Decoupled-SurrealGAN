@@ -1,0 +1,60 @@
+experiment_name = "age-decoupled-surrealgan-extended-tune"
+
+[training]
+repetitions = 2
+epochs = 140
+batch_size = 128
+learning_rate = 0.00028
+discriminator_learning_rate = 0.000045
+num_workers = 2
+persistent_workers = true
+use_amp = true
+compile_model = false
+device = "auto"
+save_every = 0
+target_regular_checkpoints = 4
+console_log_every = 1
+monitor_split = "val"
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 128
+sensitivity_process_anchor_age = 20.0
+resume_run_dir = ""
+
+[model]
+n_processes = 4
+encoder_hidden_dims = [384, 192]
+generator_hidden_dims = [384, 384, 192]
+discriminator_hidden_dims = [384, 192]
+decomposer_hidden_dims = [384, 192]
+dropout = 0.04
+
+[losses]
+adversarial = 1.25
+age_supervision = 5.15
+reference_age_supervision = 1.75
+age_adversary = 1.0
+latent_reconstruction = 1.6
+decomposition = 1.7
+identity = 2.8
+monotonicity = 0.3
+process_orthogonality = 0.29
+age_process_covariance = 0.33
+reference_process_sparsity = 0.06
+change_magnitude = 0.0
+low_activation_identity = 0.05
+process_age_correlation = 0.0
+process_latent_sparsity = 0.0
+low_activation_max = 0.05
+age_sensitivity = 2.0
+process_sensitivity = 0.9
+age_sensitivity_target_pct = 0.35
+process_sensitivity_target_pct = 0.20
+
+[tuning]
+enabled = true
+trials = 24
+timeout_seconds = 50400
+study_name = "age_decoupled_surrealgan_extended"
+storage = "sqlite:///runs/optuna_age_decoupled_surrealgan_extended.db"
+resume_if_exists = true
+objective_metric = "quality_score"

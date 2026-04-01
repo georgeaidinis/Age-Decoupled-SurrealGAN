@@ -90,7 +90,7 @@ Interpretation:
 
 ### Quality score
 
-The new validation score used for overnight runs is:
+The validation score used by the extended train/tune presets is:
 
 $$
 \mathrm{quality} =

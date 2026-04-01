@@ -38,7 +38,7 @@ Resume tuning:
 
 ```bash
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
-  --config src/age_decoupled_surrealgan/configs/overnight_tune.toml \
+  --config src/age_decoupled_surrealgan/configs/extended_tune.toml \
   tune
 ```
 
@@ -103,10 +103,11 @@ PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
   train
 ```
 
-## Overnight Configs
+## Long-Run Presets
 
 For longer laptop runs:
 
-- `src/age_decoupled_surrealgan/configs/overnight_train.toml`
-- `src/age_decoupled_surrealgan/configs/overnight_tune.toml`
+- `src/age_decoupled_surrealgan/configs/extended_train.toml`
+- `src/age_decoupled_surrealgan/configs/extended_tune.toml`
+- `scripts/run_laptop_experiments.sh`
 - `scripts/run_overnight_laptop.sh`

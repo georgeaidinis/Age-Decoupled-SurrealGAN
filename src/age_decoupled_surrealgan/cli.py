@@ -45,8 +45,10 @@ def main() -> None:
 
     if args.command == "tune":
         results = run_optuna_search(config)
-        output_path = Path(config.paths.runs_dir) / "optuna_results.json"
+        study_slug = config.tuning.study_name.replace("/", "_").replace(" ", "_")
+        output_path = Path(config.paths.runs_dir) / f"optuna_{study_slug}_results.json"
         save_json(output_path, results)
+        save_json(Path(config.paths.runs_dir) / "optuna_results.json", results)
         print(f"Optuna search completed. Results written to {output_path}")
         return
 

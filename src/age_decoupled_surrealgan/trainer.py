@@ -417,7 +417,6 @@ class AgeDecoupledTrainer:
         ensure_dir(run_dir / "metrics")
         ensure_dir(run_dir / "tensorboard")
         ensure_dir(run_dir / "logs")
-        ensure_dir(run_dir / "docs")
 
         save_json(run_dir / "resolved_config.json", self.config.as_dict())
         checkpoint_epochs = self._checkpoint_epochs()
@@ -432,7 +431,6 @@ class AgeDecoupledTrainer:
             text = load_doc_text(repo_root, filename)
             if text is not None:
                 doc_payloads.append((tag, text))
-                (run_dir / "docs" / filename).write_text(text, encoding="utf-8")
 
         reference_loader = self._cohort_loader("train", "ref", shuffle=True)
         target_loader = self._cohort_loader("train", "tar", shuffle=True)
