@@ -8,7 +8,7 @@ PARTITION="${PARTITION:-ai}"
 GPU_GRES="${GPU_GRES:-gpu:v100:1}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
 MEMORY="${MEMORY:-32G}"
-TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
+TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 
 count=$(grep -cv '^\s*$' "${CONFIG_LIST_FILE}")
 if [[ "${count}" -le 0 ]]; then

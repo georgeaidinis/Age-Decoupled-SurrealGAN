@@ -5,7 +5,7 @@ repetitions = 1
 epochs = 5
 batch_size = 64
 save_every = 0
-target_regular_checkpoints = 5
+target_regular_checkpoints = 3
 console_log_every = 1
 persistent_workers = false
 

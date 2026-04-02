@@ -85,7 +85,7 @@ During local development, the Vite server proxies API requests to `127.0.0.1:800
 
 - On Apple Silicon with MPS, GPU utilization is usually the main limiter for this ROI model rather than CPU saturation.
 - `num_workers > 0` and `persistent_workers = true` can help only if data loading becomes a bottleneck.
-- The default checkpoint cadence now uses `save_every = 0` with `target_regular_checkpoints = 5`, which keeps artifact volume manageable while preserving training history.
+- The default checkpoint cadence now uses `save_every = 0` with `target_regular_checkpoints = 3`, which keeps artifact volume manageable while preserving training history.
 
 ## Ready-Made Ablation Configs
 
