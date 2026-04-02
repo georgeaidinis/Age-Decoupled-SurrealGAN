@@ -8,7 +8,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --aidinisg@pennmedicine.upenn.edu
+#SBATCH mail-user=aidinisg@pennmedicine.upenn.edu
 
 set -euo pipefail
 
