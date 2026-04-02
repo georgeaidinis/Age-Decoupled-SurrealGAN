@@ -21,8 +21,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-/cbica/home/aidinisg/Projects/Age-Decoupled-Surrea
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
 CONFIG_PATH="${CONFIG_PATH:-src/age_decoupled_surrealgan/configs/extended_tune.toml}"
 
-source "${HOME}/miniconda3/etc/profile.d/conda.sh"
-conda activate "${CONDA_ENV_NAME}"
+source activate "${CONDA_ENV_NAME}"
 
 cd "${PROJECT_ROOT}"
 mkdir -p slurm_logs

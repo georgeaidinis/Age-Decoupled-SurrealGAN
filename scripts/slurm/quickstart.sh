@@ -22,8 +22,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
 CONFIG_PATH="${CONFIG_PATH:-src/age_decoupled_surrealgan/configs/quickstart.toml}"
 RESUME_RUN_DIR="${RESUME_RUN_DIR:-}"
 
-source "${HOME}/miniconda3/etc/profile.d/conda.sh"
-conda activate "${CONDA_ENV_NAME}"
+source activate "${CONDA_ENV_NAME}"
 
 cd "${PROJECT_ROOT}"
 mkdir -p slurm_logs

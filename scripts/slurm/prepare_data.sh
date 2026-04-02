@@ -19,8 +19,7 @@ module load slurm/current
 PROJECT_ROOT="${PROJECT_ROOT:-/cbica/home/aidinisg/Projects/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
 
-source "${HOME}/miniconda3/etc/profile.d/conda.sh"
-conda activate "${CONDA_ENV_NAME}"
+source activate "${CONDA_ENV_NAME}"
 
 cd "${PROJECT_ROOT}"
 mkdir -p slurm_logs
