@@ -12,7 +12,10 @@
 
 set -euo pipefail
 
+nvidia-smi
+
 module load slurm/current
+module load cuda/12.2
 
 PROJECT_ROOT="${PROJECT_ROOT:-/cbica/home/aidinisg/Projects/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
