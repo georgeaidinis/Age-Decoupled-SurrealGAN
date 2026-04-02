@@ -1,0 +1,36 @@
+experiment_name = "scenario-train-faithful-surreal-5"
+
+[model]
+n_processes = 5
+
+[training]
+repetitions = 5
+epochs = 220
+batch_size = 128
+learning_rate = 0.00024
+discriminator_learning_rate = 0.00005
+num_workers = 2
+persistent_workers = true
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 160
+
+[losses]
+adversarial = 1.1
+age_supervision = 5.0
+reference_age_supervision = 2.0
+age_adversary = 1.0
+latent_reconstruction = 1.9
+decomposition = 2.0
+identity = 3.8
+monotonicity = 0.48
+process_orthogonality = 0.34
+age_process_covariance = 0.3
+reference_process_sparsity = 0.08
+change_magnitude = 0.18
+low_activation_identity = 0.15
+age_sensitivity = 0.9
+process_sensitivity = 0.45
+age_sensitivity_target_pct = 0.22
+process_sensitivity_target_pct = 0.12
+age_shrinkage = 0.0
+process_shrinkage = 0.0

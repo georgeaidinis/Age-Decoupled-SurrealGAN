@@ -105,6 +105,7 @@ Detailed documentation lives in [`docs/`](docs):
 - [`docs/metrics_and_logging.md`](docs/metrics_and_logging.md): metric definitions, TensorBoard organization, terminal logs, and text-readable outputs
 - [`docs/pipeline_usage.md`](docs/pipeline_usage.md): command-line usage and experiment workflow
 - [`docs/slurm_workflows.md`](docs/slurm_workflows.md): cluster submission guidance and script usage
+- [`docs/scenario_matrix.md`](docs/scenario_matrix.md): large-scale train/tune scenarios and their scientific intent
 
 ## CLI workflow
 
@@ -220,10 +221,14 @@ The Vite dev server is configured to proxy `/runs`, `/infer`, `/atlas`, and `/he
 
 Example SLURM scripts for CUBIC-style cluster usage are provided in [`scripts/slurm/`](scripts/slurm):
 
-- [`scripts/slurm/prepare_data.slurm`](scripts/slurm/prepare_data.slurm)
-- [`scripts/slurm/train.slurm`](scripts/slurm/train.slurm)
-- [`scripts/slurm/tune.slurm`](scripts/slurm/tune.slurm)
-- [`scripts/slurm/train_array.slurm`](scripts/slurm/train_array.slurm)
+- [`scripts/slurm/prepare_data.sh`](scripts/slurm/prepare_data.sh)
+- [`scripts/slurm/train.sh`](scripts/slurm/train.sh)
+- [`scripts/slurm/tune.sh`](scripts/slurm/tune.sh)
+- [`scripts/slurm/train_array.sh`](scripts/slurm/train_array.sh)
+- [`scripts/slurm/tune_array.sh`](scripts/slurm/tune_array.sh)
+- [`scripts/slurm/submit_train_scenarios.sh`](scripts/slurm/submit_train_scenarios.sh)
+- [`scripts/slurm/submit_tune_scenarios.sh`](scripts/slurm/submit_tune_scenarios.sh)
+- [`scripts/slurm/submit_all_scenarios.sh`](scripts/slurm/submit_all_scenarios.sh)
 
 For longer local experiments, the repository also includes:
 

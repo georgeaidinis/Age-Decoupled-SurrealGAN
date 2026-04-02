@@ -49,9 +49,13 @@ VAL_TENSORBOARD_TAGS = {
     "age_sensitivity_pct_mean": "metric/validation/age_sensitivity_pct_mean",
     "mean_process_sensitivity_pct_mean": "metric/validation/process_sensitivity_pct_mean",
     "process_separation_pct_mean": "metric/validation/process_separation_pct_mean",
+    "age_positive_change_pct_mean": "metric/validation/age_positive_change_pct_mean",
+    "mean_process_positive_change_pct_mean": "metric/validation/process_positive_change_pct_mean",
     "latent_sensitivity_score": "metric/validation/latent_sensitivity_score",
+    "directional_latent_sensitivity_score": "metric/validation/directional_latent_sensitivity_score",
     "composite_score": "selection/validation/composite_score",
     "quality_score": "selection/validation/quality_score",
+    "directional_quality_score": "selection/validation/directional_quality_score",
 }
 
 

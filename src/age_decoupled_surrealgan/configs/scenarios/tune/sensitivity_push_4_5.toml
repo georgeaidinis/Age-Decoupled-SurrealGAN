@@ -1,0 +1,37 @@
+experiment_name = "scenario-tune-sensitivity-push-4-5"
+
+[training]
+repetitions = 2
+epochs = 160
+batch_size = 128
+learning_rate = 0.0003
+discriminator_learning_rate = 0.00004
+num_workers = 2
+persistent_workers = true
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 160
+
+[tuning]
+trials = 64
+timeout_seconds = 86400
+study_name = "scenario_tune_sensitivity_push_4_5"
+storage = "sqlite:///runs/optuna_scenario_tune_sensitivity_push_4_5.db"
+objective_metric = "quality_score"
+n_processes_options = [4, 5]
+width_options = [384, 512, 640]
+adversarial_min = 1.4
+adversarial_max = 2.4
+identity_min = 0.8
+identity_max = 2.5
+latent_reconstruction_min = 0.8
+latent_reconstruction_max = 1.5
+decomposition_min = 0.9
+decomposition_max = 1.6
+age_sensitivity_min = 1.5
+age_sensitivity_max = 4.0
+process_sensitivity_min = 0.8
+process_sensitivity_max = 2.2
+age_sensitivity_target_pct_min = 0.25
+age_sensitivity_target_pct_max = 0.6
+process_sensitivity_target_pct_min = 0.15
+process_sensitivity_target_pct_max = 0.4

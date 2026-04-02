@@ -5,10 +5,10 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:v100:1
 #SBATCH --mem=32G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=aidinisg@pennmedicine.upenn.edu
+#SBATCH --mail-user=aidinis@seas.upenn.edu
 
 set -euo pipefail
 

@@ -111,3 +111,24 @@ For longer laptop runs:
 - `src/age_decoupled_surrealgan/configs/extended_tune.toml`
 - `scripts/run_laptop_experiments.sh`
 - `scripts/run_overnight_laptop.sh`
+
+## Scenario Sweeps
+
+The scenario configs live under:
+
+- `src/age_decoupled_surrealgan/configs/scenarios/train/`
+- `src/age_decoupled_surrealgan/configs/scenarios/tune/`
+
+The current scenario matrix is documented in:
+
+- `docs/scenario_matrix.md`
+
+For cluster-scale array sweeps, use:
+
+- `scripts/slurm/train_scenarios.txt`
+- `scripts/slurm/tune_scenarios.txt`
+- `scripts/slurm/train_array.sh`
+- `scripts/slurm/tune_array.sh`
+- `scripts/slurm/submit_train_scenarios.sh`
+- `scripts/slurm/submit_tune_scenarios.sh`
+- `scripts/slurm/submit_all_scenarios.sh`

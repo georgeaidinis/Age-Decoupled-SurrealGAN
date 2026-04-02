@@ -1,0 +1,9 @@
+src/age_decoupled_surrealgan/configs/scenarios/train/balanced_4.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/balanced_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/faithful_surreal_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/sensitivity_push_4.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/shrinkage_directional_4.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/shrinkage_directional_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/sparse_disentangled_4.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/generator_freedom_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/train/change_regularized_4.toml

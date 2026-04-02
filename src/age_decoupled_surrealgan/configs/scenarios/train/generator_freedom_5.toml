@@ -1,0 +1,40 @@
+experiment_name = "scenario-train-generator-freedom-5"
+
+[model]
+n_processes = 5
+encoder_hidden_dims = [512, 256]
+generator_hidden_dims = [512, 512, 256]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [512, 256]
+dropout = 0.05
+
+[training]
+repetitions = 5
+epochs = 240
+batch_size = 128
+learning_rate = 0.0003
+discriminator_learning_rate = 0.00004
+num_workers = 2
+persistent_workers = true
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 192
+
+[losses]
+adversarial = 1.95
+age_supervision = 4.8
+reference_age_supervision = 1.5
+age_adversary = 0.9
+latent_reconstruction = 1.0
+decomposition = 1.05
+identity = 1.2
+monotonicity = 0.2
+process_orthogonality = 0.2
+age_process_covariance = 0.22
+reference_process_sparsity = 0.03
+low_activation_identity = 0.02
+age_sensitivity = 2.7
+process_sensitivity = 1.45
+age_sensitivity_target_pct = 0.5
+process_sensitivity_target_pct = 0.3
+age_shrinkage = 0.08
+process_shrinkage = 0.04

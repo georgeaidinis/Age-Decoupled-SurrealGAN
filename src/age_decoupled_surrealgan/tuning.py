@@ -15,37 +15,101 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
 
     def objective(trial: optuna.Trial) -> float:
         trial_config = copy.deepcopy(config)
-        width = trial.suggest_categorical("model_width", [384, 512, 640])
-        trial_config.model.n_processes = trial.suggest_int("n_processes", 4, 5)
+        width = trial.suggest_categorical("model_width", config.tuning.width_options)
+        trial_config.model.n_processes = trial.suggest_categorical("n_processes", config.tuning.n_processes_options)
         trial_config.model.encoder_hidden_dims = [width, width // 2]
         trial_config.model.generator_hidden_dims = [width, width, width // 2]
         trial_config.model.discriminator_hidden_dims = [width, width // 2]
         trial_config.model.decomposer_hidden_dims = [width, width // 2]
-        trial_config.model.dropout = trial.suggest_float("dropout", 0.02, 0.12)
-        trial_config.training.learning_rate = trial.suggest_float("learning_rate", 1.5e-4, 3.5e-4, log=True)
+        trial_config.model.dropout = trial.suggest_float("dropout", config.tuning.dropout_min, config.tuning.dropout_max)
+        trial_config.training.learning_rate = trial.suggest_float(
+            "learning_rate",
+            config.tuning.learning_rate_min,
+            config.tuning.learning_rate_max,
+            log=True,
+        )
         trial_config.training.discriminator_learning_rate = trial.suggest_float(
-            "discriminator_learning_rate", 2.5e-5, 8e-5, log=True
+            "discriminator_learning_rate",
+            config.tuning.discriminator_learning_rate_min,
+            config.tuning.discriminator_learning_rate_max,
+            log=True,
         )
-        trial_config.training.batch_size = trial.suggest_categorical("batch_size", [96, 128])
-        trial_config.losses.adversarial = trial.suggest_float("adversarial", 1.0, 2.0)
-        trial_config.losses.age_supervision = trial.suggest_float("age_supervision", 4.2, 6.3)
-        trial_config.losses.reference_age_supervision = trial.suggest_float("reference_age_supervision", 1.2, 2.4)
-        trial_config.losses.age_adversary = trial.suggest_float("age_adversary", 0.75, 1.5)
-        trial_config.losses.latent_reconstruction = trial.suggest_float("latent_reconstruction", 1.2, 1.8)
-        trial_config.losses.decomposition = trial.suggest_float("decomposition", 1.2, 2.0)
-        trial_config.losses.identity = trial.suggest_float("identity", 2.2, 4.0)
-        trial_config.losses.monotonicity = trial.suggest_float("monotonicity", 0.15, 0.45)
-        trial_config.losses.process_orthogonality = trial.suggest_float("process_orthogonality", 0.18, 0.4)
-        trial_config.losses.age_process_covariance = trial.suggest_float("age_process_covariance", 0.2, 0.5)
-        trial_config.losses.reference_process_sparsity = trial.suggest_float("reference_process_sparsity", 0.03, 0.12)
-        trial_config.losses.age_sensitivity = trial.suggest_float("age_sensitivity", 1.0, 3.0)
-        trial_config.losses.process_sensitivity = trial.suggest_float("process_sensitivity", 0.4, 1.5)
-        trial_config.losses.age_sensitivity_target_pct = trial.suggest_float("age_sensitivity_target_pct", 0.15, 0.5)
+        trial_config.training.batch_size = trial.suggest_categorical("batch_size", config.tuning.batch_size_options)
+        trial_config.losses.adversarial = trial.suggest_float("adversarial", config.tuning.adversarial_min, config.tuning.adversarial_max)
+        trial_config.losses.age_supervision = trial.suggest_float(
+            "age_supervision", config.tuning.age_supervision_min, config.tuning.age_supervision_max
+        )
+        trial_config.losses.reference_age_supervision = trial.suggest_float(
+            "reference_age_supervision",
+            config.tuning.reference_age_supervision_min,
+            config.tuning.reference_age_supervision_max,
+        )
+        trial_config.losses.age_adversary = trial.suggest_float(
+            "age_adversary", config.tuning.age_adversary_min, config.tuning.age_adversary_max
+        )
+        trial_config.losses.latent_reconstruction = trial.suggest_float(
+            "latent_reconstruction", config.tuning.latent_reconstruction_min, config.tuning.latent_reconstruction_max
+        )
+        trial_config.losses.decomposition = trial.suggest_float(
+            "decomposition", config.tuning.decomposition_min, config.tuning.decomposition_max
+        )
+        trial_config.losses.identity = trial.suggest_float("identity", config.tuning.identity_min, config.tuning.identity_max)
+        trial_config.losses.monotonicity = trial.suggest_float(
+            "monotonicity", config.tuning.monotonicity_min, config.tuning.monotonicity_max
+        )
+        trial_config.losses.process_orthogonality = trial.suggest_float(
+            "process_orthogonality", config.tuning.process_orthogonality_min, config.tuning.process_orthogonality_max
+        )
+        trial_config.losses.age_process_covariance = trial.suggest_float(
+            "age_process_covariance",
+            config.tuning.age_process_covariance_min,
+            config.tuning.age_process_covariance_max,
+        )
+        trial_config.losses.reference_process_sparsity = trial.suggest_float(
+            "reference_process_sparsity",
+            config.tuning.reference_process_sparsity_min,
+            config.tuning.reference_process_sparsity_max,
+        )
+        trial_config.losses.change_magnitude = trial.suggest_float(
+            "change_magnitude", config.tuning.change_magnitude_min, config.tuning.change_magnitude_max
+        )
+        trial_config.losses.low_activation_identity = trial.suggest_float(
+            "low_activation_identity",
+            config.tuning.low_activation_identity_min,
+            config.tuning.low_activation_identity_max,
+        )
+        trial_config.losses.process_age_correlation = trial.suggest_float(
+            "process_age_correlation",
+            config.tuning.process_age_correlation_min,
+            config.tuning.process_age_correlation_max,
+        )
+        trial_config.losses.process_latent_sparsity = trial.suggest_float(
+            "process_latent_sparsity",
+            config.tuning.process_latent_sparsity_min,
+            config.tuning.process_latent_sparsity_max,
+        )
+        trial_config.losses.age_sensitivity = trial.suggest_float(
+            "age_sensitivity", config.tuning.age_sensitivity_min, config.tuning.age_sensitivity_max
+        )
+        trial_config.losses.process_sensitivity = trial.suggest_float(
+            "process_sensitivity", config.tuning.process_sensitivity_min, config.tuning.process_sensitivity_max
+        )
+        trial_config.losses.age_sensitivity_target_pct = trial.suggest_float(
+            "age_sensitivity_target_pct",
+            config.tuning.age_sensitivity_target_pct_min,
+            config.tuning.age_sensitivity_target_pct_max,
+        )
         trial_config.losses.process_sensitivity_target_pct = trial.suggest_float(
-            "process_sensitivity_target_pct", 0.08, 0.35
+            "process_sensitivity_target_pct",
+            config.tuning.process_sensitivity_target_pct_min,
+            config.tuning.process_sensitivity_target_pct_max,
         )
-        trial_config.losses.age_shrinkage = trial.suggest_float("age_shrinkage", 0.0, 0.8)
-        trial_config.losses.process_shrinkage = trial.suggest_float("process_shrinkage", 0.0, 0.6)
+        trial_config.losses.age_shrinkage = trial.suggest_float(
+            "age_shrinkage", config.tuning.age_shrinkage_min, config.tuning.age_shrinkage_max
+        )
+        trial_config.losses.process_shrinkage = trial.suggest_float(
+            "process_shrinkage", config.tuning.process_shrinkage_min, config.tuning.process_shrinkage_max
+        )
         trial_config.training.monitor_metric = trial_config.tuning.objective_metric
         trial_config.experiment_name = config.experiment_name
 

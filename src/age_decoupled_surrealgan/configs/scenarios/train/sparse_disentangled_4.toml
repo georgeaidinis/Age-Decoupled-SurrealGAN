@@ -1,0 +1,37 @@
+experiment_name = "scenario-train-sparse-disentangled-4"
+
+[model]
+n_processes = 4
+
+[training]
+repetitions = 5
+epochs = 220
+batch_size = 128
+learning_rate = 0.00025
+discriminator_learning_rate = 0.000045
+num_workers = 2
+persistent_workers = true
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 160
+
+[losses]
+adversarial = 1.2
+age_supervision = 5.1
+reference_age_supervision = 1.8
+age_adversary = 1.45
+latent_reconstruction = 1.5
+decomposition = 1.6
+identity = 2.6
+monotonicity = 0.3
+process_orthogonality = 0.38
+age_process_covariance = 0.55
+reference_process_sparsity = 0.14
+process_age_correlation = 0.18
+process_latent_sparsity = 0.08
+low_activation_identity = 0.05
+age_sensitivity = 1.8
+process_sensitivity = 0.85
+age_sensitivity_target_pct = 0.32
+process_sensitivity_target_pct = 0.18
+age_shrinkage = 0.1
+process_shrinkage = 0.05

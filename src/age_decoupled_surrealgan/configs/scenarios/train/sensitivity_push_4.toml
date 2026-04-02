@@ -1,0 +1,35 @@
+experiment_name = "scenario-train-sensitivity-push-4"
+
+[model]
+n_processes = 4
+
+[training]
+repetitions = 5
+epochs = 240
+batch_size = 128
+learning_rate = 0.0003
+discriminator_learning_rate = 0.00004
+num_workers = 2
+persistent_workers = true
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 192
+
+[losses]
+adversarial = 1.85
+age_supervision = 5.0
+reference_age_supervision = 1.6
+age_adversary = 0.9
+latent_reconstruction = 1.15
+decomposition = 1.2
+identity = 1.6
+monotonicity = 0.24
+process_orthogonality = 0.24
+age_process_covariance = 0.28
+reference_process_sparsity = 0.04
+low_activation_identity = 0.03
+age_sensitivity = 2.8
+process_sensitivity = 1.4
+age_sensitivity_target_pct = 0.48
+process_sensitivity_target_pct = 0.28
+age_shrinkage = 0.1
+process_shrinkage = 0.05

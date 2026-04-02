@@ -1,0 +1,33 @@
+experiment_name = "scenario-tune-sparse-disentangle-4-5"
+
+[training]
+repetitions = 2
+epochs = 160
+batch_size = 128
+learning_rate = 0.00026
+discriminator_learning_rate = 0.000045
+num_workers = 2
+persistent_workers = true
+monitor_metric = "quality_score"
+sensitivity_eval_subjects = 128
+
+[tuning]
+trials = 56
+timeout_seconds = 86400
+study_name = "scenario_tune_sparse_disentangle_4_5"
+storage = "sqlite:///runs/optuna_scenario_tune_sparse_disentangle_4_5.db"
+objective_metric = "quality_score"
+n_processes_options = [4, 5]
+width_options = [384, 512]
+age_adversary_min = 1.0
+age_adversary_max = 2.0
+age_process_covariance_min = 0.35
+age_process_covariance_max = 0.8
+process_age_correlation_min = 0.1
+process_age_correlation_max = 0.4
+process_latent_sparsity_min = 0.05
+process_latent_sparsity_max = 0.25
+reference_process_sparsity_min = 0.08
+reference_process_sparsity_max = 0.25
+process_orthogonality_min = 0.25
+process_orthogonality_max = 0.5

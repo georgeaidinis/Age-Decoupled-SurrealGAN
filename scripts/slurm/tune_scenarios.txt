@@ -1,0 +1,6 @@
+src/age_decoupled_surrealgan/configs/scenarios/tune/balanced_4_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/tune/directional_4_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/tune/faithful_surreal_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/tune/sensitivity_push_4_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/tune/sparse_disentangle_4_5.toml
+src/age_decoupled_surrealgan/configs/scenarios/tune/shrinkage_5.toml

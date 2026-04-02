@@ -113,6 +113,25 @@ Interpretation:
 - Higher is better.
 - It keeps the age-decoupling goal of `composite_score` but adds pressure toward a generator that actually responds to latent manipulation.
 
+### Directional quality score
+
+The directional variant adds a penalty for positive generator responses when age or process latents are pushed upward:
+
+$$
+\mathrm{directional\_quality}
+=
+\mathrm{composite}
++
+0.25 \cdot \mathrm{directional\_latent\_sensitivity}
+$$
+
+where the directional latent sensitivity subtracts terms based on the mean positive change induced by age and process manipulations.
+
+Interpretation:
+- Higher is better.
+- This is useful when you want to bias model selection toward shrinkage-dominant patterns.
+- It is an explicit prior, not a neutral biological truth.
+
 ## Agreement Metrics
 
 Agreement is still computed across repetitions using permutation alignment of process dimensions:

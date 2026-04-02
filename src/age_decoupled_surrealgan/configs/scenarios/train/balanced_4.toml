@@ -1,12 +1,7 @@
-experiment_name = "age-decoupled-surrealgan-extended-train"
+experiment_name = "scenario-train-balanced-4"
 
 [model]
 n_processes = 4
-encoder_hidden_dims = [384, 192]
-generator_hidden_dims = [384, 384, 192]
-discriminator_hidden_dims = [384, 192]
-decomposer_hidden_dims = [384, 192]
-dropout = 0.04
 
 [training]
 repetitions = 5
@@ -14,21 +9,10 @@ epochs = 220
 batch_size = 128
 learning_rate = 0.00028
 discriminator_learning_rate = 0.000045
-weight_decay = 0.0001
-gradient_clip_norm = 5.0
 num_workers = 2
 persistent_workers = true
-use_amp = false
-compile_model = false
-device = "auto"
-save_every = 0
-target_regular_checkpoints = 6
-console_log_every = 1
-monitor_split = "val"
 monitor_metric = "quality_score"
 sensitivity_eval_subjects = 160
-sensitivity_process_anchor_age = 20.0
-resume_run_dir = ""
 
 [losses]
 adversarial = 1.25
@@ -42,14 +26,10 @@ monotonicity = 0.3
 process_orthogonality = 0.29
 age_process_covariance = 0.33
 reference_process_sparsity = 0.06
-change_magnitude = 0.0
 low_activation_identity = 0.05
-process_age_correlation = 0.0
-process_latent_sparsity = 0.0
-low_activation_max = 0.05
 age_sensitivity = 2.0
 process_sensitivity = 0.9
 age_sensitivity_target_pct = 0.35
 process_sensitivity_target_pct = 0.20
-age_shrinkage = 0.4
-process_shrinkage = 0.2
+age_shrinkage = 0.1
+process_shrinkage = 0.05

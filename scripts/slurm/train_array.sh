@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=age_surrealgan_array
+#SBATCH --array=0-0
 #SBATCH --partition=all
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
@@ -8,7 +9,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --output=slurm_logs/%x-%A_%a.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=aidinisg@pennmedicine.upenn.edu
+#SBATCH --mail-user=aidinis@seas.upenn.edu
 
 set -euo pipefail
 
@@ -19,7 +20,7 @@ module load cuda/12.2
 
 PROJECT_ROOT="${PROJECT_ROOT:-/cbica/home/aidinisg/Projects/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
-CONFIG_LIST_FILE="${CONFIG_LIST_FILE:-scripts/slurm/config_list.txt}"
+CONFIG_LIST_FILE="${CONFIG_LIST_FILE:-scripts/slurm/train_scenarios.txt}"
 RESUME_RUN_DIR="${RESUME_RUN_DIR:-}"
 
 source activate "${CONDA_ENV_NAME}"

@@ -129,6 +129,8 @@ def summarize_latent_sensitivity(
     age_sensitivity_pct_mean: float,
     process_sensitivity_pct_means: dict[str, float],
     process_separation_pct_mean: float,
+    age_positive_change_pct_mean: float = 0.0,
+    process_positive_change_pct_means: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     mean_process_sensitivity = float(np.mean(list(process_sensitivity_pct_means.values()))) if process_sensitivity_pct_means else 0.0
     quality = float(
@@ -136,10 +138,25 @@ def summarize_latent_sensitivity(
         + np.log1p(max(mean_process_sensitivity, 0.0))
         + 0.5 * np.log1p(max(process_separation_pct_mean, 0.0))
     )
+    process_positive_change_pct_means = process_positive_change_pct_means or {}
+    mean_process_positive_change = (
+        float(np.mean(list(process_positive_change_pct_means.values())))
+        if process_positive_change_pct_means
+        else 0.0
+    )
+    directional_quality = float(
+        quality
+        - 0.5 * np.log1p(max(age_positive_change_pct_mean, 0.0))
+        - 0.25 * np.log1p(max(mean_process_positive_change, 0.0))
+    )
     return {
         "age_sensitivity_pct_mean": float(age_sensitivity_pct_mean),
         "process_sensitivity_pct_means": process_sensitivity_pct_means,
         "mean_process_sensitivity_pct_mean": mean_process_sensitivity,
         "process_separation_pct_mean": float(process_separation_pct_mean),
+        "age_positive_change_pct_mean": float(age_positive_change_pct_mean),
+        "process_positive_change_pct_means": process_positive_change_pct_means,
+        "mean_process_positive_change_pct_mean": mean_process_positive_change,
         "latent_sensitivity_score": quality,
+        "directional_latent_sensitivity_score": directional_quality,
     }

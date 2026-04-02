@@ -4,10 +4,10 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=01:00:00
+#SBATCH --time=00:10:00
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=aidinisg@pennmedicine.upenn.edu
+#SBATCH --mail-user=aidinis@seas.upenn.edu
 
 set -euo pipefail
 

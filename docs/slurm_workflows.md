@@ -18,30 +18,45 @@ The provided scripts under [`scripts/slurm/`](/Users/georgeaidinis/Desktop/PhD/E
 Prepare processed data:
 
 ```bash
-sbatch scripts/slurm/prepare_data.slurm
+sbatch scripts/slurm/prepare_data.sh
 ```
 
 Train:
 
 ```bash
-sbatch scripts/slurm/train.slurm
+sbatch scripts/slurm/train.sh
 ```
 
 Tune:
 
 ```bash
-sbatch scripts/slurm/tune.slurm
+sbatch scripts/slurm/tune.sh
 ```
 
 Array training over multiple config files:
 
 ```bash
-sbatch --array=0-2 scripts/slurm/train_array.slurm
+sbatch --array=0-8 scripts/slurm/train_array.sh
 ```
 
-The default config list for array jobs is:
+Array tuning over multiple config files:
 
-- [`scripts/slurm/config_list.txt`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/scripts/slurm/config_list.txt)
+```bash
+sbatch --array=0-5 scripts/slurm/tune_array.sh
+```
+
+Or use the helper submitters:
+
+```bash
+scripts/slurm/submit_train_scenarios.sh
+scripts/slurm/submit_tune_scenarios.sh
+scripts/slurm/submit_all_scenarios.sh
+```
+
+The default config lists for the scenario arrays are:
+
+- [`scripts/slurm/train_scenarios.txt`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/scripts/slurm/train_scenarios.txt)
+- [`scripts/slurm/tune_scenarios.txt`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/scripts/slurm/tune_scenarios.txt)
 
 ## Resource Defaults
 
@@ -55,7 +70,7 @@ This is intentionally conservative for ROI-based training. If a particular run n
 
 ## Notes
 
-- Edit `PROJECT_ROOT`, `CONDA_ENV_NAME`, `CONFIG_PATH`, and GPU request lines before first use.
+- Edit `PROJECT_ROOT`, `CONDA_ENV_NAME`, and the mail address lines before first use.
 - For longer jobs, consider `long`.
 - For shorter smoke runs, consider `short`.
 - If your environment lives outside the default Conda path, update the activation lines accordingly.
