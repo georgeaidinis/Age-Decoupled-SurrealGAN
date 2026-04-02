@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=age_surrealgan_train
-#SBATCH --partition=aishort
+#SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:v100:1
