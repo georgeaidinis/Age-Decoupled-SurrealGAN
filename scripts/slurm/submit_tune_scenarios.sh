@@ -24,4 +24,5 @@ sbatch \
   --mem="${MEMORY}" \
   --time="${TIME_LIMIT}" \
   --export=ALL,PROJECT_ROOT="${PROJECT_ROOT}",CONDA_ENV_NAME="${CONDA_ENV_NAME}",CONFIG_LIST_FILE="${CONFIG_LIST_FILE}" \
+  --propagate=NONE
   scripts/slurm/tune_array.sh

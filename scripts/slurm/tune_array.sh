@@ -10,6 +10,7 @@
 #SBATCH --output=slurm_logs/%x-%A_%a.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=aidinis@seas.upenn.edu
+#SBATCH --propagate=NONE
 
 set -euo pipefail
 
