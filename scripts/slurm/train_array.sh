@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=age_surrealgan_array
 #SBATCH --array=0-0
-#SBATCH --partition=all
+#SBATCH --partition=ai
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:v100:1

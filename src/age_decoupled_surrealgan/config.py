@@ -73,7 +73,7 @@ class TrainingConfig:
     compile_model: bool = False
     device: str = "auto"
     save_every: int = 0
-    target_regular_checkpoints: int = 5
+    target_regular_checkpoints: int = 3
     log_every: int = 10
     console_log_every: int = 1
     monitor_split: str = "val"
