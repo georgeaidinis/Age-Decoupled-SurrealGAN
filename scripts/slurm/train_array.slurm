@@ -14,7 +14,7 @@ set -euo pipefail
 
 module load slurm/current
 
-PROJECT_ROOT="${PROJECT_ROOT:-/cbica/projects/YOUR_PROJECT/Age-Decoupled-SurrealGAN}"
+PROJECT_ROOT="${PROJECT_ROOT:-/cbica/home/aidinisg/Projects/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
 CONFIG_LIST_FILE="${CONFIG_LIST_FILE:-scripts/slurm/config_list.txt}"
 RESUME_RUN_DIR="${RESUME_RUN_DIR:-}"
