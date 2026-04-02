@@ -17,7 +17,7 @@ GPU_GRES="${GPU_GRES}" \
 CPUS_PER_TASK="${CPUS_PER_TASK}" \
 MEMORY="${MEMORY}" \
 TIME_LIMIT="${TRAIN_TIME_LIMIT}" \
-scripts/slurm/submit_train_scenarios.sh
+bash scripts/slurm/submit_train_scenarios.sh
 
 PROJECT_ROOT="${PROJECT_ROOT}" \
 CONDA_ENV_NAME="${CONDA_ENV_NAME}" \
@@ -26,4 +26,4 @@ GPU_GRES="${GPU_GRES}" \
 CPUS_PER_TASK="${CPUS_PER_TASK}" \
 MEMORY="${MEMORY}" \
 TIME_LIMIT="${TUNE_TIME_LIMIT}" \
-scripts/slurm/submit_tune_scenarios.sh
+bash scripts/slurm/submit_tune_scenarios.sh

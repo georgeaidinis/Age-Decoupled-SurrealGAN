@@ -16,13 +16,18 @@ if [[ "${count}" -le 0 ]]; then
   exit 1
 fi
 
-sbatch \
-  --array="0-$((count - 1))" \
-  --partition="${PARTITION}" \
-  --gres="${GPU_GRES}" \
-  --cpus-per-task="${CPUS_PER_TASK}" \
-  --mem="${MEMORY}" \
-  --time="${TIME_LIMIT}" \
-  --export=ALL,PROJECT_ROOT="${PROJECT_ROOT}",CONDA_ENV_NAME="${CONDA_ENV_NAME}",CONFIG_LIST_FILE="${CONFIG_LIST_FILE}" \
-  --propagate=NONE
-  scripts/slurm/train_array.sh
+cmd=(
+  sbatch
+  "--array=0-$((count - 1))"
+  "--partition=${PARTITION}"
+  "--gres=${GPU_GRES}"
+  "--cpus-per-task=${CPUS_PER_TASK}"
+  "--mem=${MEMORY}"
+  "--time=${TIME_LIMIT}"
+  "--export=ALL,PROJECT_ROOT=${PROJECT_ROOT},CONDA_ENV_NAME=${CONDA_ENV_NAME},CONFIG_LIST_FILE=${CONFIG_LIST_FILE}"
+  "--propagate=NONE"
+  "scripts/slurm/train_array.sh"
+)
+
+printf 'Submitting train scenario array with command:\n%s\n' "${cmd[*]}"
+"${cmd[@]}"
