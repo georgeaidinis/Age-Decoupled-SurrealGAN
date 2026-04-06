@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,8 +11,10 @@ import numpy as np
 import pandas as pd
 from nibabel import Nifti1Image, load as load_nifti
 
+from ..analysis_artifacts import build_run_analysis_artifacts
 from ..config import ProjectConfig
 from ..inference import generate_single_row, infer_subject_defaults
+from ..reporting import format_duration
 from ..utils import ensure_dir
 
 try:
@@ -72,6 +75,13 @@ def create_app(config: ProjectConfig):
             raise HTTPException(status_code=404, detail="run_summary.json not found")
         return json.loads(path.read_text())
 
+    def analysis_manifest(run_name: str) -> dict[str, Any]:
+        run_dir = run_dir_for_name(run_name)
+        path = run_dir / "analysis" / "manifest.json"
+        if not path.exists():
+            return build_run_analysis_artifacts(run_dir, config, force=False, device=config.training.device)
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def roi_metadata() -> pd.DataFrame:
         path = processed_dir / "roi_metadata.csv"
         if not path.exists():
@@ -116,6 +126,7 @@ def create_app(config: ProjectConfig):
             "summary": payload,
             "n_processes": checkpoint_payload["n_processes"],
             "feature_columns": checkpoint_payload["feature_columns"],
+            "analysis": payload.get("analysis"),
         }
 
     @app.get("/runs/{run_name}/splits/{split_name}")
@@ -148,6 +159,7 @@ def create_app(config: ProjectConfig):
 
     @app.post("/defaults")
     def subject_defaults(request: SubjectDefaultsRequest = Body(...)) -> dict[str, Any]:
+        request_timer_start = time.perf_counter()
         payload = run_summary(request.run_name)
         checkpoint_path = Path(payload["selected_checkpoint"])
         checkpoint_meta = torch_load_metadata(checkpoint_path)
@@ -180,6 +192,7 @@ def create_app(config: ProjectConfig):
                     "age_years": default_age_years,
                     "n_processes": defaults["n_processes"],
                     "process_head": defaults["process_latents"][: min(5, len(defaults["process_latents"]))],
+                    "duration": format_duration(time.perf_counter() - request_timer_start),
                 },
             )
         return {
@@ -194,6 +207,7 @@ def create_app(config: ProjectConfig):
 
     @app.post("/infer")
     def infer(request: InferRequest = Body(...)) -> dict[str, Any]:
+        request_timer_start = time.perf_counter()
         if request.run_name is None or not str(request.run_name).strip():
             raise HTTPException(status_code=400, detail="run_name is required.")
         payload = run_summary(request.run_name)
@@ -228,6 +242,7 @@ def create_app(config: ProjectConfig):
                 ["subject_id", "study", "age", "sex", "diagnosis_raw", "diagnosis_group", "cohort_bucket"]
             ].to_dict()
 
+        inference_timer_start = time.perf_counter()
         try:
             inference = generate_single_row(
                 checkpoint_path=checkpoint_path,
@@ -239,6 +254,7 @@ def create_app(config: ProjectConfig):
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        inference_seconds = time.perf_counter() - inference_timer_start
         roi_df = roi_metadata().copy()
         roi_df["baseline_value"] = inference["baseline_target"]
         roi_df["predicted_value"] = inference["synthetic_target"]
@@ -249,7 +265,9 @@ def create_app(config: ProjectConfig):
             roi_df[f"process_{idx + 1}_delta"] = [values[idx] for values in zip(*inference["process_deltas"])]
         roi_df["abs_percent_change"] = roi_df["percent_change"].abs()
         top_changes = roi_df.sort_values("abs_percent_change", ascending=False).head(25)
+        overlay_timer_start = time.perf_counter()
         overlay_url = overlay_url_for_percent_change(inference["percent_change"], roi_df)
+        overlay_seconds = time.perf_counter() - overlay_timer_start
         if debug_mode:
             print(
                 "[api/infer]",
@@ -269,6 +287,9 @@ def create_app(config: ProjectConfig):
                     "delta_abs_mean": float(roi_df["delta"].abs().mean()),
                     "pct_abs_max": float(roi_df["percent_change"].abs().max()),
                     "pct_abs_mean": float(roi_df["percent_change"].abs().mean()),
+                    "inference_duration": format_duration(inference_seconds),
+                    "overlay_duration": format_duration(overlay_seconds),
+                    "total_duration": format_duration(time.perf_counter() - request_timer_start),
                     "generation_debug": inference.get("debug", {}),
                 },
             )
@@ -278,8 +299,48 @@ def create_app(config: ProjectConfig):
             "overlay_image_url": overlay_url,
             "roi_table": roi_df.to_dict(orient="records"),
             "top_changes": top_changes.to_dict(orient="records"),
+            "timing": {
+                "inference_seconds": inference_seconds,
+                "overlay_seconds": overlay_seconds,
+                "total_seconds": time.perf_counter() - request_timer_start,
+            },
             "debug": inference.get("debug") if debug_mode else None,
         }
+
+    @app.get("/runs/{run_name}/population-patterns")
+    def get_population_patterns(run_name: str) -> dict[str, Any]:
+        manifest = analysis_manifest(run_name)
+        population = manifest.get("population_patterns", {})
+        patterns = []
+        for item in population.get("patterns", []):
+            row = dict(item)
+            overlay_filename = row.pop("overlay_filename", None)
+            if overlay_filename:
+                row["overlay_image_url"] = f"/runs/{run_name}/analysis/population-patterns/overlays/{overlay_filename}"
+            patterns.append(row)
+        return {
+            **population,
+            "patterns": patterns,
+        }
+
+    @app.get("/runs/{run_name}/population-patterns/{pattern_key}")
+    def get_population_pattern(run_name: str, pattern_key: str) -> dict[str, Any]:
+        _ = analysis_manifest(run_name)
+        pattern_path = run_dir_for_name(run_name) / "analysis" / "population_patterns" / f"{pattern_key}.json"
+        if not pattern_path.exists():
+            raise HTTPException(status_code=404, detail=f"Population pattern not found: {pattern_key}")
+        payload = json.loads(pattern_path.read_text(encoding="utf-8"))
+        overlay_filename = payload.pop("overlay_filename", None)
+        if overlay_filename:
+            payload["overlay_image_url"] = f"/runs/{run_name}/analysis/population-patterns/overlays/{overlay_filename}"
+        return payload
+
+    @app.get("/runs/{run_name}/analysis/population-patterns/overlays/{overlay_name}")
+    def population_overlay(run_name: str, overlay_name: str):
+        path = run_dir_for_name(run_name) / "analysis" / "population_patterns" / overlay_name
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Population overlay not found.")
+        return FileResponse(path)
 
     @app.get("/atlas/manifest")
     def atlas_manifest() -> dict[str, str]:

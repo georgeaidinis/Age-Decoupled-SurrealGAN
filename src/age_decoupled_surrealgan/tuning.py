@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
+import time
+from datetime import datetime
 from typing import Any
 
 from .config import ProjectConfig
+from .reporting import format_duration
 from .trainer import AgeDecoupledTrainer
 
 
@@ -13,7 +16,18 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - runtime dependency
         raise RuntimeError("Optuna is not installed in the active environment.") from exc
 
+    tuning_started_at = datetime.now()
+    tuning_timer_start = time.perf_counter()
+    print(
+        f"Starting Optuna study '{config.tuning.study_name}' at "
+        f"{tuning_started_at.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(trials={config.tuning.trials}, timeout_seconds={config.tuning.timeout_seconds})"
+    )
+
     def objective(trial: optuna.Trial) -> float:
+        trial_started_at = datetime.now()
+        trial_timer_start = time.perf_counter()
+        print(f"[optuna] starting trial {trial.number:03d} at {trial_started_at.strftime('%Y-%m-%d %H:%M:%S')}")
         trial_config = copy.deepcopy(config)
         width = trial.suggest_categorical("model_width", config.tuning.width_options)
         trial_config.model.n_processes = trial.suggest_categorical("n_processes", config.tuning.n_processes_options)
@@ -115,7 +129,13 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
 
         trainer = AgeDecoupledTrainer(trial_config)
         summary = trainer.train(trial_name=f"trial-{trial.number:03d}")
-        return float(summary["split_metrics"]["val"][trial_config.tuning.objective_metric])
+        value = float(summary["split_metrics"]["val"][trial_config.tuning.objective_metric])
+        print(
+            f"[optuna] completed trial {trial.number:03d} "
+            f"in {format_duration(time.perf_counter() - trial_timer_start)} "
+            f"with {trial_config.tuning.objective_metric}={value:.4f}"
+        )
+        return value
 
     study = optuna.create_study(
         study_name=config.tuning.study_name,
@@ -124,7 +144,16 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
         direction="maximize",
     )
     study.optimize(objective, n_trials=config.tuning.trials, timeout=config.tuning.timeout_seconds)
+    total_seconds = time.perf_counter() - tuning_timer_start
+    print(
+        f"Completed Optuna study '{config.tuning.study_name}' "
+        f"in {format_duration(total_seconds)} "
+        f"(best_value={study.best_value:.4f})"
+    )
     return {
+        "started_at": tuning_started_at.isoformat(),
+        "completed_at": datetime.now().isoformat(),
+        "total_seconds": total_seconds,
         "best_value": study.best_value,
         "best_params": study.best_params,
         "trials": [
@@ -133,6 +162,7 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
                 "value": trial.value,
                 "params": trial.params,
                 "state": str(trial.state),
+                "duration_seconds": trial.duration.total_seconds() if trial.duration is not None else None,
             }
             for trial in study.trials
         ],

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .analysis_artifacts import backfill_analysis_artifacts
 from .config import load_project_config
 from .data.prepare import prepare_dataset
 from .tuning import run_optuna_search
@@ -25,6 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("tune", help="Run Optuna tuning")
     subparsers.add_parser("serve", help="Start the FastAPI backend")
+    backfill_parser = subparsers.add_parser("backfill-run-artifacts", help="Generate post-run analysis artifacts for runs")
+    backfill_parser.add_argument("--run-dir", type=str, default=None, help="Optional single run directory to backfill")
+    backfill_parser.add_argument("--force", action="store_true", help="Regenerate analysis artifacts even if they exist")
     return parser
 
 
@@ -56,6 +60,11 @@ def main() -> None:
         from .api.app import run_api
 
         run_api(config)
+        return
+
+    if args.command == "backfill-run-artifacts":
+        results = backfill_analysis_artifacts(config, run_dir=args.run_dir, force=args.force)
+        print(f"Backfilled analysis artifacts for {len(results)} run(s).")
         return
 
 

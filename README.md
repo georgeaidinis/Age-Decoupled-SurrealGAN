@@ -106,6 +106,7 @@ Detailed documentation lives in [`docs/`](docs):
 - [`docs/pipeline_usage.md`](docs/pipeline_usage.md): command-line usage and experiment workflow
 - [`docs/slurm_workflows.md`](docs/slurm_workflows.md): cluster submission guidance and script usage
 - [`docs/scenario_matrix.md`](docs/scenario_matrix.md): large-scale train/tune scenarios and their scientific intent
+- [`docs/apr2026_project_overview.md`](docs/apr2026_project_overview.md): PI-facing technical overview, equations, current results, and interpretation
 
 ## CLI workflow
 

@@ -5,12 +5,18 @@ import { BrainViewer } from "./components/BrainViewer";
 import { SliderPanel } from "./components/SliderPanel";
 import {
   atlasManifest,
+  getAtlasRoiMetadata,
+  getPopulationPattern,
+  getPopulationPatterns,
   getRunMetadata,
   getSubjectDefaults,
   getSubjects,
   inferSubject,
   listRuns,
   type InferenceResponse,
+  type PopulationPatternManifest,
+  type PopulationPatternResponse,
+  type RoiMetadataRow,
   type SubjectRow,
 } from "./lib/api";
 
@@ -30,20 +36,30 @@ export function App() {
   const [ageYears, setAgeYears] = useState(20);
   const [processLatents, setProcessLatents] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<"slices" | "volume">("slices");
+  const [displayMode, setDisplayMode] = useState<"subject" | "population">("subject");
   const [overlayScaleMode, setOverlayScaleMode] = useState<"relative" | "absolute">("relative");
   const [overlayOpacity, setOverlayOpacity] = useState(0.38);
   const [absoluteOverlayScale, setAbsoluteOverlayScale] = useState(1.0);
-  const [atlasUrls, setAtlasUrls] = useState<{ atlas_image_url: string } | null>(null);
+  const [atlasUrls, setAtlasUrls] = useState<{ atlas_image_url: string; atlas_segmentation_url: string } | null>(null);
+  const [roiMetadata, setRoiMetadata] = useState<RoiMetadataRow[]>([]);
   const [overlayImageUrl, setOverlayImageUrl] = useState<string | null>(null);
+  const [populationManifest, setPopulationManifest] = useState<PopulationPatternManifest | null>(null);
+  const [selectedPopulationPattern, setSelectedPopulationPattern] = useState("age");
+  const [populationPattern, setPopulationPattern] = useState<PopulationPatternResponse | null>(null);
   const [loadingDefaults, setLoadingDefaults] = useState(false);
   const [loadingInference, setLoadingInference] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([listRuns(), atlasManifest()])
-      .then(([loadedRuns, manifest]) => {
+      .then(async ([loadedRuns, manifest]) => {
+        const roiRows = manifest.roi_metadata_url ? await getAtlasRoiMetadata(manifest.roi_metadata_url) : [];
         setRuns(loadedRuns);
-        setAtlasUrls({ atlas_image_url: manifest.atlas_image_url });
+        setAtlasUrls({
+          atlas_image_url: manifest.atlas_image_url,
+          atlas_segmentation_url: manifest.atlas_segmentation_url,
+        });
+        setRoiMetadata(roiRows);
       })
       .catch((loadError) => {
         console.error(loadError);
@@ -61,6 +77,9 @@ export function App() {
       setOverlayImageUrl(null);
       setAgeYears(20);
       setProcessLatents([]);
+      setPopulationManifest(null);
+      setSelectedPopulationPattern("age");
+      setPopulationPattern(null);
       return;
     }
     let cancelled = false;
@@ -86,6 +105,57 @@ export function App() {
       cancelled = true;
     };
   }, [selectedRun]);
+
+  useEffect(() => {
+    if (!selectedRun) {
+      return;
+    }
+    let cancelled = false;
+    setPopulationManifest(null);
+    setPopulationPattern(null);
+    getPopulationPatterns(selectedRun)
+      .then((manifest) => {
+        if (cancelled) {
+          return;
+        }
+        setPopulationManifest(manifest);
+        setSelectedPopulationPattern(manifest.patterns[0]?.key ?? "age");
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to load population patterns.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRun]);
+
+  useEffect(() => {
+    if (!selectedRun || !selectedPopulationPattern) {
+      return;
+    }
+    let cancelled = false;
+    getPopulationPattern(selectedRun, selectedPopulationPattern)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setPopulationPattern(payload);
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to load the selected population pattern.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPopulationPattern, selectedRun]);
 
   useEffect(() => {
     if (!selectedRun) {
@@ -175,14 +245,42 @@ export function App() {
 
   const topChanges = useMemo(
     () =>
-      (inference?.top_changes ?? []).map((row) => ({
+      ((displayMode === "population" ? populationPattern?.top_changes : inference?.top_changes) ?? []).map((row) => ({
         name: row.roi_name ?? row.roi_full_name ?? "Unknown ROI",
         percent_change: Number(row.percent_change ?? 0),
         delta: Number(row.delta ?? 0),
         baseline_value: Number(row.baseline_value ?? 0),
         predicted_value: Number(row.predicted_value ?? 0),
       })),
-    [inference],
+    [displayMode, inference, populationPattern],
+  );
+
+  const roiMetadataById = useMemo(
+    () =>
+      Object.fromEntries(
+        roiMetadata
+          .filter((row) => Number.isFinite(Number(row.roi_id)))
+          .map((row) => [Number(row.roi_id), row]),
+      ) as Record<number, RoiMetadataRow>,
+    [roiMetadata],
+  );
+
+  const roiValueById = useMemo(
+    () =>
+      Object.fromEntries(
+        ((displayMode === "population" ? populationPattern?.roi_table : inference?.roi_table) ?? [])
+          .filter((row) => Number.isFinite(Number(row.roi_id)))
+          .map((row) => [
+            Number(row.roi_id),
+            {
+              delta: Number(row.delta ?? 0),
+              percent_change: Number(row.percent_change ?? 0),
+              baseline_value: Number(row.baseline_value ?? 0),
+              predicted_value: Number(row.predicted_value ?? 0),
+            },
+          ]),
+      ) as Record<number, { delta: number; percent_change: number; baseline_value: number; predicted_value: number }>,
+    [displayMode, inference, populationPattern],
   );
 
   const chartMode = useMemo(() => {
@@ -190,16 +288,39 @@ export function App() {
     return maxPercent >= 0.01 ? "percent" : "delta";
   }, [topChanges]);
 
+  const orderedTopChanges = useMemo(
+    () =>
+      [...topChanges].sort(
+        (lhs, rhs) =>
+          Math.abs(chartMode === "percent" ? rhs.percent_change : rhs.delta) -
+          Math.abs(chartMode === "percent" ? lhs.percent_change : lhs.delta),
+      ),
+    [chartMode, topChanges],
+  );
+
   const overlayAbsMax = useMemo(() => {
-    const values = inference?.inference.percent_change ?? [];
+    const values =
+      displayMode === "population"
+        ? (populationPattern?.roi_table ?? []).map((row) => Number(row.percent_change ?? 0))
+        : (inference?.inference.percent_change ?? []);
     const maxValue = values.reduce((current, value) => Math.max(current, Math.abs(value)), 0);
     if (overlayScaleMode === "relative") {
       return Math.max(maxValue, 1e-4);
     }
     return Math.max(absoluteOverlayScale, 1e-4);
-  }, [absoluteOverlayScale, inference, overlayScaleMode]);
+  }, [absoluteOverlayScale, displayMode, inference, overlayScaleMode, populationPattern]);
 
-  const currentMetadata = inference?.metadata ?? subjectMetadata ?? {};
+  const currentMetadata =
+    displayMode === "population"
+      ? {
+          mode: "population",
+          pattern: populationPattern?.label ?? selectedPopulationPattern,
+          reference_split: populationManifest?.reference_split ?? "",
+          reference_bucket: populationManifest?.reference_cohort_bucket ?? "",
+          anchor_age: populationManifest?.process_anchor_age_years ?? "",
+        }
+      : inference?.metadata ?? subjectMetadata ?? {};
+  const activeOverlayImageUrl = displayMode === "population" ? populationPattern?.overlay_image_url ?? null : overlayImageUrl;
   const controlsDisabled = !selectedRun || selectedRow === null || loadingDefaults || loadingInference;
   const formatMetadataValue = (key: string, value: string | number | null) => {
     if (value === null || value === undefined || value === "") {
@@ -266,6 +387,27 @@ export function App() {
         </div>
 
         <div className="control-group">
+          <label>Display mode</label>
+          <div className="segmented-control">
+            <button
+              className={displayMode === "subject" ? "active" : ""}
+              type="button"
+              onClick={() => setDisplayMode("subject")}
+            >
+              Subject
+            </button>
+            <button
+              className={displayMode === "population" ? "active" : ""}
+              type="button"
+              onClick={() => setDisplayMode("population")}
+              disabled={!populationManifest}
+            >
+              Population
+            </button>
+          </div>
+        </div>
+
+        <div className="control-group">
           <label>View mode</label>
           <div className="segmented-control">
             <button
@@ -308,6 +450,20 @@ export function App() {
             runs are comparable.
           </p>
         </div>
+
+        {displayMode === "population" && populationManifest ? (
+          <div className="control-group">
+            <label>Population pattern</label>
+            <select value={selectedPopulationPattern} onChange={(event) => setSelectedPopulationPattern(event.target.value)}>
+              {populationManifest.patterns.map((pattern) => (
+                <option key={pattern.key} value={pattern.key}>
+                  {pattern.label}
+                </option>
+              ))}
+            </select>
+            <p className="control-help">{populationPattern?.description ?? "Select age or one of the process factors."}</p>
+          </div>
+        ) : null}
 
         {overlayScaleMode === "absolute" ? (
           <div className="control-group">
@@ -380,15 +536,19 @@ export function App() {
           {atlasUrls ? (
             <BrainViewer
               atlasImageUrl={atlasUrls.atlas_image_url}
-              overlayImageUrl={overlayImageUrl}
+              atlasSegmentationUrl={atlasUrls.atlas_segmentation_url}
+              overlayImageUrl={activeOverlayImageUrl}
               overlayAbsMax={overlayAbsMax}
               overlayOpacity={overlayOpacity}
               mode={viewMode}
+              overlayScaleMode={overlayScaleMode}
+              roiMetadataById={roiMetadataById}
+              roiValueById={roiValueById}
             />
           ) : null}
         </div>
 
-        {(loadingDefaults || loadingInference) && !error ? (
+        {(loadingDefaults || loadingInference) && !error && displayMode === "subject" ? (
           <section className="panel status-panel">
             <div className="panel-header">
               <h3>{loadingInference ? "Generating ROI changes" : "Loading subject defaults"}</h3>
@@ -401,28 +561,44 @@ export function App() {
           </section>
         ) : null}
 
-        <SliderPanel
-          ageYears={ageYears}
-          processLatents={processLatents}
-          disabled={controlsDisabled}
-          onAgeChange={setAgeYears}
-          onProcessChange={setProcessLatents}
-          onGenerate={handleGenerate}
-        />
+        {displayMode === "subject" ? (
+          <SliderPanel
+            ageYears={ageYears}
+            processLatents={processLatents}
+            disabled={controlsDisabled}
+            onAgeChange={setAgeYears}
+            onProcessChange={setProcessLatents}
+            onGenerate={handleGenerate}
+          />
+        ) : (
+          <section className="panel">
+            <div className="panel-header">
+              <h3>Population Pattern View</h3>
+              <p>These overlays are precomputed per run from the selected checkpoint, so they load immediately.</p>
+            </div>
+            <p className="control-help">
+              Showing: <strong>{populationPattern?.label ?? selectedPopulationPattern}</strong>
+            </p>
+          </section>
+        )}
 
         <section className="panel chart-panel">
           <div className="panel-header">
             <h3>Top ROI changes</h3>
             <p>
-              {chartMode === "percent"
-                ? "Bars show percent change relative to the selected subject's current ROI volume."
-                : "Percent changes are extremely small for this checkpoint, so the plot is showing raw ROI deltas instead."}
+              {displayMode === "population"
+                ? chartMode === "percent"
+                  ? "Bars show the average isolated population-level percent change for the selected factor."
+                  : "Average percent changes are extremely small for this pattern, so the plot is showing raw ROI deltas instead."
+                : chartMode === "percent"
+                  ? "Bars show percent change relative to the selected subject's current ROI volume."
+                  : "Percent changes are extremely small for this checkpoint, so the plot is showing raw ROI deltas instead."}
             </p>
           </div>
           <div className="chart-wrap">
-            {topChanges.length > 0 ? (
+            {orderedTopChanges.length > 0 ? (
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={topChanges}>
+                <BarChart data={orderedTopChanges}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="name" hide />
                   <YAxis
@@ -448,18 +624,26 @@ export function App() {
               </ResponsiveContainer>
             ) : (
               <div className="empty-chart-state">
-                Select a subject, adjust sliders if needed, and click Generate to populate ROI changes.
+                {displayMode === "population"
+                  ? "Select a population pattern to populate the top-ROI summary."
+                  : "Select a subject, adjust sliders if needed, and click Generate to populate ROI changes."}
               </div>
             )}
           </div>
         </section>
 
-        {inference?.debug ? (
+        {displayMode === "subject" && inference?.debug ? (
           <section className="panel">
             <div className="panel-header">
               <h3>Generation Debug</h3>
               <p>Useful when a checkpoint appears weakly responsive to latent changes.</p>
             </div>
+            {inference.timing ? (
+              <p className="control-help">
+                inference={inference.timing.inference_seconds.toFixed(2)}s | overlay={inference.timing.overlay_seconds.toFixed(2)}s
+                {" | "}total={inference.timing.total_seconds.toFixed(2)}s
+              </p>
+            ) : null}
             <pre className="debug-block">{JSON.stringify(inference.debug, null, 2)}</pre>
           </section>
         ) : null}

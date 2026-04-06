@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,17 @@ def save_records_csv(path: Path, records: list[dict[str, Any]]) -> None:
     pd.DataFrame(records).to_csv(path, index=False)
 
 
+def wallclock_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_duration(seconds: float | int) -> str:
+    total_seconds = max(0, int(round(float(seconds))))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 def epoch_log_line(
     repetition_index: int,
     repetitions: int,
@@ -90,10 +102,18 @@ def epoch_log_line(
     total_epochs: int,
     train_metrics: dict[str, float],
     val_metrics: dict[str, Any],
+    train_seconds: float,
+    val_seconds: float,
+    epoch_seconds: float,
+    repetition_elapsed_seconds: float,
 ) -> str:
     return (
         f"[rep {repetition_index + 1}/{repetitions}] "
         f"[epoch {epoch}/{total_epochs}] "
+        f"[t_train={format_duration(train_seconds)} "
+        f"t_val={format_duration(val_seconds)} "
+        f"t_epoch={format_duration(epoch_seconds)} "
+        f"t_rep={format_duration(repetition_elapsed_seconds)}] "
         f"train: G={train_metrics['generator_total']:.4f} "
         f"D={train_metrics['discriminator']:.4f} "
         f"adv={train_metrics['adv']:.4f} "
@@ -110,7 +130,7 @@ def epoch_log_line(
 def append_log_line(path: Path, line: str) -> None:
     ensure_dir(path.parent)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(line)
+        handle.write(f"[{wallclock_timestamp()}] {line}")
         handle.write("\n")
 
 
@@ -137,6 +157,7 @@ def startup_summary_lines(
     decomposer_hidden_dims: list[int],
 ) -> list[str]:
     return [
+        f"Started: {wallclock_timestamp()}",
         f"Experiment: {experiment_name}",
         f"Config: {config_path}",
         f"Device: {device}",
@@ -173,6 +194,11 @@ def save_run_markdown_summary(summary: dict[str, Any], output_path: Path) -> Non
         "",
         f"- Selected repetition: `{summary.get('selected_repetition')}`",
         f"- Selected checkpoint: `{summary.get('selected_checkpoint')}`",
+        (
+            f"- Total runtime: `{format_duration(summary.get('timing', {}).get('total_seconds', 0.0))}`"
+            if summary.get("timing")
+            else ""
+        ),
         "",
         "## Agreement",
         "",
@@ -194,6 +220,11 @@ def save_run_markdown_summary(summary: dict[str, Any], output_path: Path) -> Non
                 f"- Mean absolute residual process-age correlation: `{metrics['mean_absolute_residual_process_age_correlation']:.4f}`",
                 f"- Age sensitivity (% mean): `{metrics.get('age_sensitivity_pct_mean', 0.0):.4f}`",
                 f"- Mean process sensitivity (% mean): `{metrics.get('mean_process_sensitivity_pct_mean', 0.0):.4f}`",
+                (
+                    f"- Split runtime: `{format_duration(summary.get('timing', {}).get('split_timing', {}).get(split_name, {}).get('total_seconds', 0.0))}`"
+                    if summary.get("timing")
+                    else ""
+                ),
                 "",
             ]
         )

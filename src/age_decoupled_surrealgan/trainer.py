@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from torch.amp import autocast, GradScaler
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
+from .analysis_artifacts import build_run_analysis_artifacts
 from .config import ProjectConfig, default_config_path
 from .data.dataset import CohortDataset
 from .evaluation import aggregate_repetition_predictions, evaluate_prediction_frame, save_metrics, save_prediction_frame
@@ -37,6 +39,7 @@ from .reporting import (
     append_log_line,
     epoch_log_line,
     flatten_metrics,
+    format_duration,
     load_doc_text,
     save_run_markdown_summary,
     save_jsonl,
@@ -500,6 +503,8 @@ class AgeDecoupledTrainer:
         return {key: float(sum(values) / max(len(values), 1)) for key, values in metrics.items()}
 
     def train(self, trial_name: str | None = None, resume_run_dir: str | None = None) -> dict[str, Any]:
+        run_started_at = datetime.now()
+        run_timer_start = time.perf_counter()
         configured_resume_dir = (
             self.config.training.resume_run_dir if getattr(self.config.training, "resume_run_dir", None) else None
         )
@@ -592,6 +597,8 @@ class AgeDecoupledTrainer:
                 print(skip_line)
                 append_log_line(log_path, skip_line)
                 continue
+            repetition_started_at = datetime.now()
+            repetition_timer_start = time.perf_counter()
             seed_everything(self.config.data.split_seed + repetition_index)
             model = AgeDecoupledSurrealGAN(self.n_features, self.config).to(self.device)
             writer = (
@@ -606,6 +613,10 @@ class AgeDecoupledTrainer:
             rep_line = f"Starting repetition {repetition_index + 1}/{self.config.training.repetitions}"
             print(rep_line)
             append_log_line(log_path, rep_line)
+            append_log_line(
+                log_path,
+                f"Repetition {repetition_index + 1} started at {repetition_started_at.strftime('%Y-%m-%d %H:%M:%S')}",
+            )
 
             optimizer_g = AdamW(
                 list(model.encoder.parameters())
@@ -653,13 +664,24 @@ class AgeDecoupledTrainer:
                 model = torch.compile(model)  # type: ignore[assignment]
 
             for epoch in range(start_epoch, self.config.training.epochs + 1):
+                epoch_timer_start = time.perf_counter()
+                train_timer_start = time.perf_counter()
                 train_metrics = self._train_epoch(model, reference_loader, target_loader, optimizer_g, optimizer_d, scaler)
+                train_seconds = time.perf_counter() - train_timer_start
+                val_timer_start = time.perf_counter()
                 val_metrics, val_frame = self._evaluate_model(model, "val")
+                val_seconds = time.perf_counter() - val_timer_start
+                epoch_seconds = time.perf_counter() - epoch_timer_start
+                repetition_elapsed_seconds = time.perf_counter() - repetition_timer_start
                 score = float(val_metrics[self.config.training.monitor_metric])
 
                 epoch_record = {
                     "repetition_index": repetition_index,
                     "epoch": epoch,
+                    "epoch_train_seconds": train_seconds,
+                    "epoch_val_seconds": val_seconds,
+                    "epoch_total_seconds": epoch_seconds,
+                    "repetition_elapsed_seconds": repetition_elapsed_seconds,
                     **flatten_metrics({f"train_{key}": value for key, value in train_metrics.items()}),
                     **flatten_metrics({f"val_{key}": value for key, value in val_metrics.items()}),
                     "selection_score": score,
@@ -674,6 +696,10 @@ class AgeDecoupledTrainer:
                         self.config.training.epochs,
                         train_metrics,
                         val_metrics,
+                        train_seconds,
+                        val_seconds,
+                        epoch_seconds,
+                        repetition_elapsed_seconds,
                     )
                     print(line)
                     append_log_line(log_path, line)
@@ -740,6 +766,14 @@ class AgeDecoupledTrainer:
                     "best_score": best_score,
                 }
             )
+            repetition_duration_seconds = time.perf_counter() - repetition_timer_start
+            repetition_line = (
+                f"Completed repetition {repetition_index + 1}/{self.config.training.repetitions} "
+                f"in {format_duration(repetition_duration_seconds)} "
+                f"(best_score={best_score:.4f}, best_checkpoint={Path(best_checkpoint).name})"
+            )
+            print(repetition_line)
+            append_log_line(log_path, repetition_line)
             if writer is not None:
                 writer.close()
 
@@ -749,22 +783,32 @@ class AgeDecoupledTrainer:
         save_jsonl(run_dir / "logs" / "epoch_history.jsonl", epoch_history_records)
         save_records_csv(run_dir / "metrics" / "repetition_summary.csv", repetition_summaries)
 
+        agreement_timer_start = time.perf_counter()
         agreement = aggregate_repetition_predictions(repetition_val_paths, self.config.model.n_processes)
+        agreement_seconds = time.perf_counter() - agreement_timer_start
         selected_repetition = agreement["best_repetition_index"]
         selected_checkpoint = Path(repetition_summaries[selected_repetition]["best_checkpoint"])
 
+        selected_model_load_start = time.perf_counter()
         best_model = AgeDecoupledSurrealGAN(self.n_features, self.config).to(self.device)
         checkpoint = torch.load(selected_checkpoint, map_location=self.device)
         best_model.load_state_dict(checkpoint["model_state"])
         best_model.eval()
+        selected_model_load_seconds = time.perf_counter() - selected_model_load_start
 
         split_metrics: dict[str, Any] = {}
+        split_timing: dict[str, dict[str, float]] = {}
         for split_name in ["train", "val", "id_test", "ood_test", "application"]:
+            split_timer_start = time.perf_counter()
+            inference_timer_start = time.perf_counter()
             prediction_frame = self._predict_split(best_model, split_name)
+            inference_seconds = time.perf_counter() - inference_timer_start
             prediction_path = run_dir / "predictions" / f"{split_name}.csv"
             save_prediction_frame(prediction_frame, prediction_path)
+            evaluation_timer_start = time.perf_counter()
             metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
             sensitivity_metrics = self._compute_latent_sensitivity_metrics(best_model, split_name)
+            evaluation_seconds = time.perf_counter() - evaluation_timer_start
             metrics = {
                 **metrics,
                 **sensitivity_metrics,
@@ -774,17 +818,50 @@ class AgeDecoupledTrainer:
                 ),
             }
             split_metrics[split_name] = metrics
+            split_timing[split_name] = {
+                "prediction_seconds": inference_seconds,
+                "evaluation_seconds": evaluation_seconds,
+                "total_seconds": time.perf_counter() - split_timer_start,
+            }
             save_metrics(metrics, run_dir / "metrics" / f"{split_name}.json")
+            split_line = (
+                f"Completed split {split_name}: "
+                f"predict={format_duration(inference_seconds)} "
+                f"evaluate={format_duration(evaluation_seconds)} "
+                f"total={format_duration(split_timing[split_name]['total_seconds'])}"
+            )
+            print(split_line)
+            append_log_line(log_path, split_line)
+
+        run_duration_seconds = time.perf_counter() - run_timer_start
 
         summary = {
             "run_dir": str(run_dir),
+            "started_at": run_started_at.isoformat(),
+            "completed_at": datetime.now().isoformat(),
             "selected_repetition": selected_repetition,
             "selected_checkpoint": str(selected_checkpoint),
             "agreement": agreement,
             "repetitions": repetition_summaries,
             "split_metrics": split_metrics,
+            "timing": {
+                "total_seconds": run_duration_seconds,
+                "agreement_seconds": agreement_seconds,
+                "selected_model_load_seconds": selected_model_load_seconds,
+                "split_timing": split_timing,
+            },
         }
+        save_json(run_dir / "run_summary.json", summary)
+        analysis_manifest = build_run_analysis_artifacts(run_dir, self.config, force=True, device=str(self.device))
+        summary["analysis"] = analysis_manifest
         save_json(run_dir / "run_summary.json", summary)
         save_split_metrics_tables(split_metrics, run_dir / "metrics")
         save_run_markdown_summary(summary, run_dir / "metrics" / "run_summary.md")
+        completion_line = (
+            f"Run completed in {format_duration(run_duration_seconds)} "
+            f"(agreement={format_duration(agreement_seconds)}, "
+            f"selected_model_load={format_duration(selected_model_load_seconds)})"
+        )
+        print(completion_line)
+        append_log_line(log_path, completion_line)
         return summary
