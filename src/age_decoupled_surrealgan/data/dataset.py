@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ..config import ProjectConfig
+from .normalization import apply_feature_normalization, load_normalization_stats, normalization_payload_from_stats
 
 
 @dataclass
@@ -25,12 +26,24 @@ def normalize_age(age: torch.Tensor, age_min: float, age_max: float) -> torch.Te
 
 
 class CohortDataset(Dataset):
-    def __init__(self, frame: pd.DataFrame, feature_columns: list[str], age_min: float, age_max: float):
+    def __init__(
+        self,
+        frame: pd.DataFrame,
+        feature_columns: list[str],
+        age_min: float,
+        age_max: float,
+        normalization_payload: dict | None = None,
+    ):
         self.frame = frame.reset_index(drop=True).copy()
         self.feature_columns = feature_columns
         self.age_min = age_min
         self.age_max = age_max
-        self.features = torch.tensor(self.frame[self.feature_columns].values, dtype=torch.float32)
+        self.raw_features = torch.tensor(self.frame[self.feature_columns].to_numpy(dtype="float32"), dtype=torch.float32)
+        if normalization_payload is None:
+            feature_values = self.raw_features.numpy()
+        else:
+            feature_values = apply_feature_normalization(self.frame[self.feature_columns], normalization_payload, feature_columns)
+        self.features = torch.tensor(feature_values, dtype=torch.float32)
         self.ages = torch.tensor(self.frame["age"].fillna(age_min).values, dtype=torch.float32)
         self.subject_ids = self.frame["subject_id"].astype(str).tolist()
 
@@ -41,6 +54,7 @@ class CohortDataset(Dataset):
         age_value = self.ages[index]
         return {
             "features": self.features[index],
+            "raw_features": self.raw_features[index],
             "age": age_value,
             "age_norm": normalize_age(age_value.unsqueeze(0), self.age_min, self.age_max).squeeze(0),
             "subject_id": self.subject_ids[index],
@@ -60,3 +74,9 @@ def load_feature_columns(config: ProjectConfig) -> list[str]:
     if not isinstance(feature_columns, list):
         raise ValueError("split_manifest.json does not contain feature_columns")
     return feature_columns
+
+
+def load_normalization_payload(config: ProjectConfig) -> dict:
+    processed_dir = Path(config.paths.processed_dir)
+    stats = load_normalization_stats(processed_dir / "normalization_stats.csv")
+    return normalization_payload_from_stats(stats)

@@ -150,3 +150,6 @@ slurm_logs/
 
 # CUBIC cluster information:
 /scripts/cluster_notes.txt
+
+# Don't ignore the run summary scripts:
+!runs/run_summary/analyze_runs.py

@@ -92,6 +92,7 @@ def compute_age_metrics(prediction_frame: pd.DataFrame, n_processes: int) -> dic
             "residual_process_age_correlations": {},
             "mean_absolute_process_age_correlation": 0.0,
             "mean_absolute_residual_process_age_correlation": 0.0,
+            "process_latent_pairwise_correlation_abs_mean": 0.0,
             "composite_score": 0.0,
         }
 
@@ -113,6 +114,11 @@ def compute_age_metrics(prediction_frame: pd.DataFrame, n_processes: int) -> dic
 
     mean_abs_corr = float(np.mean(np.abs(list(process_corrs.values()))))
     mean_abs_residual = float(np.mean(np.abs(list(residual_corrs.values()))))
+    pairwise_latent_corrs: list[float] = []
+    for i in range(n_processes):
+        for j in range(i + 1, n_processes):
+            pairwise_latent_corrs.append(abs(safe_pearsonr(frame[f"r{i + 1}"].to_numpy(dtype=float), frame[f"r{j + 1}"].to_numpy(dtype=float))))
+    mean_pairwise_latent_corr = float(np.mean(pairwise_latent_corrs)) if pairwise_latent_corrs else 0.0
     composite = float(age_corr - mean_abs_residual - 0.5 * mean_abs_corr)
     return {
         "age_latent_age_correlation": age_corr,
@@ -120,6 +126,7 @@ def compute_age_metrics(prediction_frame: pd.DataFrame, n_processes: int) -> dic
         "residual_process_age_correlations": residual_corrs,
         "mean_absolute_process_age_correlation": mean_abs_corr,
         "mean_absolute_residual_process_age_correlation": mean_abs_residual,
+        "process_latent_pairwise_correlation_abs_mean": mean_pairwise_latent_corr,
         "composite_score": composite,
     }
 
@@ -129,6 +136,7 @@ def summarize_latent_sensitivity(
     age_sensitivity_pct_mean: float,
     process_sensitivity_pct_means: dict[str, float],
     process_separation_pct_mean: float,
+    process_pattern_correlation_abs_mean: float = 0.0,
     age_positive_change_pct_mean: float = 0.0,
     process_positive_change_pct_means: dict[str, float] | None = None,
 ) -> dict[str, Any]:
@@ -137,6 +145,7 @@ def summarize_latent_sensitivity(
         np.log1p(max(age_sensitivity_pct_mean, 0.0))
         + np.log1p(max(mean_process_sensitivity, 0.0))
         + 0.5 * np.log1p(max(process_separation_pct_mean, 0.0))
+        - np.log1p(max(process_pattern_correlation_abs_mean, 0.0))
     )
     process_positive_change_pct_means = process_positive_change_pct_means or {}
     mean_process_positive_change = (
@@ -149,14 +158,20 @@ def summarize_latent_sensitivity(
         - 0.5 * np.log1p(max(age_positive_change_pct_mean, 0.0))
         - 0.25 * np.log1p(max(mean_process_positive_change, 0.0))
     )
+    collapse_aware_quality = float(
+        directional_quality
+        - 0.75 * np.log1p(max(process_pattern_correlation_abs_mean, 0.0))
+    )
     return {
         "age_sensitivity_pct_mean": float(age_sensitivity_pct_mean),
         "process_sensitivity_pct_means": process_sensitivity_pct_means,
         "mean_process_sensitivity_pct_mean": mean_process_sensitivity,
         "process_separation_pct_mean": float(process_separation_pct_mean),
+        "process_pattern_correlation_abs_mean": float(process_pattern_correlation_abs_mean),
         "age_positive_change_pct_mean": float(age_positive_change_pct_mean),
         "process_positive_change_pct_means": process_positive_change_pct_means,
         "mean_process_positive_change_pct_mean": mean_process_positive_change,
         "latent_sensitivity_score": quality,
         "directional_latent_sensitivity_score": directional_quality,
+        "collapse_aware_latent_sensitivity_score": collapse_aware_quality,
     }

@@ -10,7 +10,8 @@ import torch
 from nibabel import Nifti1Image, load as load_nifti
 
 from .config import ProjectConfig
-from .inference import load_checkpoint, normalize_age_years, resolve_device
+from .data.normalization import apply_feature_normalization, scale_delta_to_raw
+from .inference import checkpoint_normalization_payload, load_checkpoint, normalize_age_years, resolve_device
 from .metrics import align_process_latents, compute_repetition_agreement
 from .utils import ensure_dir, save_json
 
@@ -84,14 +85,17 @@ def _prediction_frame_for_split(
     device: str,
     batch_size: int = 1024,
 ) -> pd.DataFrame:
-    model, _ = load_checkpoint(checkpoint_path, device=device)
+    model, checkpoint = load_checkpoint(checkpoint_path, device=device)
     run_device = resolve_device(device)
-    ref_tensor = torch.tensor(reference_template.reindex(feature_columns).to_numpy(dtype="float32"), device=run_device)
+    normalization = checkpoint_normalization_payload(checkpoint)
+    reference_norm = apply_feature_normalization(reference_template.reindex(feature_columns), normalization, feature_columns)
+    ref_tensor = torch.tensor(reference_norm.reshape(-1), dtype=torch.float32, device=run_device)
     outputs: list[pd.DataFrame] = []
     with torch.no_grad():
         for start in range(0, len(frame), batch_size):
             batch = frame.iloc[start : start + batch_size].copy()
-            features = torch.tensor(batch[feature_columns].to_numpy(dtype="float32"), device=run_device)
+            features_norm = apply_feature_normalization(batch[feature_columns], normalization, feature_columns)
+            features = torch.tensor(features_norm, dtype=torch.float32, device=run_device)
             reference = ref_tensor.unsqueeze(0).repeat(features.shape[0], 1)
             prediction = model.infer(features, reference)
             block = batch[
@@ -128,8 +132,14 @@ def _compute_population_patterns(
     roi_df = _load_roi_metadata(processed_dir)
     reference_frame = _load_split_frame(processed_dir, "train")
     reference_frame = reference_frame.loc[reference_frame["cohort_bucket"] == "ref"].dropna(subset=feature_columns)
-    features = torch.tensor(reference_frame[feature_columns].to_numpy(dtype="float32"), device=run_device)
-    baseline_abs = features.abs().clamp_min(1.0)
+    normalization = checkpoint_normalization_payload(checkpoint)
+    reference_raw = reference_frame[feature_columns].to_numpy(dtype="float32")
+    features = torch.tensor(
+        apply_feature_normalization(reference_frame[feature_columns], normalization, feature_columns),
+        dtype=torch.float32,
+        device=run_device,
+    )
+    baseline_abs = torch.tensor(reference_raw, dtype=torch.float32, device=run_device).abs().clamp_min(1.0)
     zero_process = torch.zeros(features.shape[0], int(checkpoint["n_processes"]), device=run_device)
     age_low = torch.full(
         (features.shape[0], checkpoint_config.model.age_latent_dim),
@@ -157,15 +167,25 @@ def _compute_population_patterns(
     manifest_patterns: list[dict[str, Any]] = []
     sign_summaries: list[dict[str, Any]] = []
     top_rows: list[pd.DataFrame] = []
+    baseline_abs_np = np.clip(np.abs(reference_raw), 1.0, None)
 
     with torch.no_grad():
-        age_low_target, _ = model.synthesize(features, age_low, zero_process)
-        age_high_target, _ = model.synthesize(features, age_high, zero_process)
-        age_delta = age_high_target - age_low_target
-        age_percent = ((age_delta / baseline_abs) * 100.0).mean(dim=0).detach().cpu().numpy()
-        age_mean_delta = age_delta.mean(dim=0).detach().cpu().numpy()
-        age_baseline = features.mean(dim=0).detach().cpu().numpy()
-        age_predicted = age_high_target.mean(dim=0).detach().cpu().numpy()
+        age_low_target, age_low_delta = model.synthesize(features, age_low, zero_process)
+        age_high_target, age_high_delta = model.synthesize(features, age_high, zero_process)
+        age_delta_raw = scale_delta_to_raw(
+            (age_high_delta - age_low_delta).detach().cpu().numpy(),
+            normalization,
+            feature_columns,
+        )
+        age_high_target_raw = scale_delta_to_raw(
+            age_high_target.detach().cpu().numpy() - features.detach().cpu().numpy(),
+            normalization,
+            feature_columns,
+        ) + reference_raw
+        age_percent = ((age_delta_raw / baseline_abs_np) * 100.0).mean(axis=0)
+        age_mean_delta = age_delta_raw.mean(axis=0)
+        age_baseline = reference_raw.mean(axis=0)
+        age_predicted = age_high_target_raw.mean(axis=0)
         age_table = roi_df.copy()
         age_table["baseline_value"] = age_baseline
         age_table["predicted_value"] = age_predicted
@@ -201,16 +221,30 @@ def _compute_population_patterns(
         sign_summaries.append(age_payload["sign_summary"])
         top_rows.append(age_top.assign(pattern_key="age"))
 
-        anchor_target, _ = model.synthesize(features, anchor_age, zero_process)
+        anchor_target, anchor_delta = model.synthesize(features, anchor_age, zero_process)
         for idx in range(int(checkpoint["n_processes"])):
             process_latents = torch.zeros(features.shape[0], int(checkpoint["n_processes"]), device=run_device)
             process_latents[:, idx] = 1.0
-            process_target, _ = model.synthesize(features, anchor_age, process_latents)
-            process_delta = process_target - anchor_target
-            process_percent = ((process_delta / baseline_abs) * 100.0).mean(dim=0).detach().cpu().numpy()
-            process_mean_delta = process_delta.mean(dim=0).detach().cpu().numpy()
-            process_baseline = anchor_target.mean(dim=0).detach().cpu().numpy()
-            process_predicted = process_target.mean(dim=0).detach().cpu().numpy()
+            process_target, process_delta_norm = model.synthesize(features, anchor_age, process_latents)
+            process_delta = scale_delta_to_raw(
+                (process_delta_norm - anchor_delta).detach().cpu().numpy(),
+                normalization,
+                feature_columns,
+            )
+            process_target_raw = scale_delta_to_raw(
+                process_target.detach().cpu().numpy() - features.detach().cpu().numpy(),
+                normalization,
+                feature_columns,
+            ) + reference_raw
+            process_baseline_raw = scale_delta_to_raw(
+                anchor_target.detach().cpu().numpy() - features.detach().cpu().numpy(),
+                normalization,
+                feature_columns,
+            ) + reference_raw
+            process_percent = ((process_delta / baseline_abs_np) * 100.0).mean(axis=0)
+            process_mean_delta = process_delta.mean(axis=0)
+            process_baseline = process_baseline_raw.mean(axis=0)
+            process_predicted = process_target_raw.mean(axis=0)
             process_table = roi_df.copy()
             process_table["baseline_value"] = process_baseline
             process_table["predicted_value"] = process_predicted
@@ -373,7 +407,7 @@ def build_run_analysis_artifacts(
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     processed_dir = Path(config.paths.processed_dir)
     analysis_dir = ensure_dir(run_dir / "analysis")
-    reference_template = pd.Series(checkpoint["reference_template"])
+    reference_template = pd.Series(checkpoint.get("reference_template_raw", checkpoint["reference_template"]))
     feature_columns = checkpoint["feature_columns"]
     n_processes = int(checkpoint["n_processes"])
     ensure_prediction_splits(
@@ -415,7 +449,10 @@ def backfill_analysis_artifacts(config: ProjectConfig, run_dir: str | None = Non
         reverse=True,
     )
     results: list[dict[str, Any]] = []
-    for path in target_dirs:
+    total = len(target_dirs)
+    for index, path in enumerate(target_dirs, start=1):
+        print(f"[backfill {index}/{total}] processing {path}")
         manifest = build_run_analysis_artifacts(path, config, force=force, device=config.training.device)
         results.append({"run_dir": str(path), "analysis_manifest": manifest})
+        print(f"[backfill {index}/{total}] completed {path}")
     return results

@@ -124,6 +124,21 @@ def run_optuna_search(config: ProjectConfig) -> dict[str, Any]:
         trial_config.losses.process_shrinkage = trial.suggest_float(
             "process_shrinkage", config.tuning.process_shrinkage_min, config.tuning.process_shrinkage_max
         )
+        trial_config.losses.generator_process_separation = trial.suggest_float(
+            "generator_process_separation",
+            config.tuning.generator_process_separation_min,
+            config.tuning.generator_process_separation_max,
+        )
+        trial_config.losses.generator_process_redundancy = trial.suggest_float(
+            "generator_process_redundancy",
+            config.tuning.generator_process_redundancy_min,
+            config.tuning.generator_process_redundancy_max,
+        )
+        trial_config.losses.process_latent_pairwise_correlation = trial.suggest_float(
+            "process_latent_pairwise_correlation",
+            config.tuning.process_latent_pairwise_correlation_min,
+            config.tuning.process_latent_pairwise_correlation_max,
+        )
         trial_config.training.monitor_metric = trial_config.tuning.objective_metric
         trial_config.experiment_name = config.experiment_name
 

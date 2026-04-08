@@ -10,6 +10,12 @@ from sklearn.model_selection import train_test_split
 
 from ..config import ProjectConfig
 from ..utils import ensure_dir, save_json
+from .normalization import (
+    apply_feature_normalization,
+    fit_normalization_stats,
+    normalization_payload_from_stats,
+    save_normalization_stats,
+)
 from .muse import build_roi_metadata, extract_roi_id, load_muse_roi_map
 
 
@@ -191,15 +197,39 @@ def prepare_dataset(config: ProjectConfig) -> dict[str, Any]:
     canonical.loc[canonical["eligible"]].to_csv(processed_dir / "eligible_rows.csv", index=False)
 
     train_reference = split_frames["train"].loc[split_frames["train"]["cohort_bucket"] == "ref", feature_columns]
-    reference_template = train_reference.mean(axis=0).rename("value").to_frame()
-    reference_template.index.name = "feature_name"
-    reference_template.reset_index().to_csv(processed_dir / "reference_template.csv", index=False)
+    normalization_stats = fit_normalization_stats(
+        train_reference,
+        feature_columns,
+        method=config.data.roi_normalization,
+        epsilon=config.data.roi_normalization_epsilon,
+        clip=config.data.roi_normalization_clip,
+        std_scale=config.data.roi_normalization_std_scale,
+    )
+    save_normalization_stats(processed_dir / "normalization_stats.csv", normalization_stats)
+    normalization_payload = normalization_payload_from_stats(normalization_stats)
+
+    reference_template_raw = train_reference.mean(axis=0).rename("value").to_frame()
+    reference_template_raw.index.name = "feature_name"
+    reference_template_raw.reset_index().to_csv(processed_dir / "reference_template.csv", index=False)
+    reference_template_normalized_values = apply_feature_normalization(
+        reference_template_raw["value"].reindex(feature_columns),
+        normalization_payload,
+        feature_columns,
+    ).reshape(-1)
+    reference_template_normalized = pd.DataFrame(
+        {
+            "feature_name": feature_columns,
+            "value": reference_template_normalized_values,
+        }
+    )
+    reference_template_normalized.to_csv(processed_dir / "reference_template_normalized.csv", index=False)
 
     manifest = {
         "config": config.as_dict(),
         "feature_columns": feature_columns,
         "n_features": len(feature_columns),
         "holdout_study": config.data.holdout_study,
+        "roi_normalization": normalization_payload,
         "splits": {name: _split_summary(frame) for name, frame in split_frames.items()},
         "all_rows": _split_summary(canonical),
     }

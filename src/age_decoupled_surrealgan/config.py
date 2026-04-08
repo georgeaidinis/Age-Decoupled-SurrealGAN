@@ -45,6 +45,10 @@ class DataConfig:
     split_seed: int = 17
     age_latent_normalization_min: int = 20
     age_latent_normalization_max: int = 97
+    roi_normalization: str = "zscore"
+    roi_normalization_std_scale: float = 1.0
+    roi_normalization_clip: float = 6.0
+    roi_normalization_epsilon: float = 1.0e-6
 
 
 @dataclass
@@ -56,6 +60,7 @@ class ModelConfig:
     discriminator_hidden_dims: list[int] = field(default_factory=lambda: [512, 256])
     decomposer_hidden_dims: list[int] = field(default_factory=lambda: [512, 256])
     dropout: float = 0.1
+    process_separation_margin: float = 0.15
 
 
 @dataclass
@@ -77,10 +82,12 @@ class TrainingConfig:
     log_every: int = 10
     console_log_every: int = 1
     monitor_split: str = "val"
-    monitor_metric: str = "composite_score"
+    monitor_metric: str = "collapse_aware_quality_score"
     sensitivity_eval_subjects: int = 64
     sensitivity_process_anchor_age: float = 20.0
     resume_run_dir: str | None = None
+    sampled_process_one_hot_only: bool = True
+    low_activation_max: float = 0.05
 
 
 @dataclass
@@ -89,24 +96,27 @@ class LossConfig:
     age_supervision: float = 4.0
     reference_age_supervision: float = 2.0
     age_adversary: float = 1.0
-    latent_reconstruction: float = 1.0
-    decomposition: float = 1.0
-    identity: float = 4.0
-    monotonicity: float = 0.5
-    process_orthogonality: float = 0.2
-    age_process_covariance: float = 0.4
-    reference_process_sparsity: float = 0.2
-    change_magnitude: float = 0.0
-    low_activation_identity: float = 0.0
-    process_age_correlation: float = 0.0
-    process_latent_sparsity: float = 0.0
+    latent_reconstruction: float = 2.0
+    decomposition: float = 2.0
+    identity: float = 1.0
+    monotonicity: float = 0.75
+    process_orthogonality: float = 0.25
+    age_process_covariance: float = 0.25
+    reference_process_sparsity: float = 0.1
+    change_magnitude: float = 0.1
+    low_activation_identity: float = 0.25
+    process_age_correlation: float = 0.1
+    process_latent_sparsity: float = 0.05
     low_activation_max: float = 0.05
-    age_sensitivity: float = 0.0
-    process_sensitivity: float = 0.0
+    age_sensitivity: float = 0.5
+    process_sensitivity: float = 1.0
     age_sensitivity_target_pct: float = 0.25
     process_sensitivity_target_pct: float = 0.10
     age_shrinkage: float = 0.0
     process_shrinkage: float = 0.0
+    generator_process_separation: float = 1.0
+    generator_process_redundancy: float = 1.0
+    process_latent_pairwise_correlation: float = 0.5
 
 
 @dataclass
@@ -117,7 +127,7 @@ class TuningConfig:
     study_name: str = "age_decoupled_surrealgan"
     storage: str = "sqlite:///runs/optuna_age_decoupled_surrealgan.db"
     resume_if_exists: bool = True
-    objective_metric: str = "quality_score"
+    objective_metric: str = "collapse_aware_quality_score"
     width_options: list[int] = field(default_factory=lambda: [384, 512, 640])
     n_processes_options: list[int] = field(default_factory=lambda: [4, 5])
     batch_size_options: list[int] = field(default_factory=lambda: [96, 128])
@@ -169,6 +179,12 @@ class TuningConfig:
     age_shrinkage_max: float = 0.8
     process_shrinkage_min: float = 0.0
     process_shrinkage_max: float = 0.6
+    generator_process_separation_min: float = 0.1
+    generator_process_separation_max: float = 1.0
+    generator_process_redundancy_min: float = 0.1
+    generator_process_redundancy_max: float = 1.0
+    process_latent_pairwise_correlation_min: float = 0.0
+    process_latent_pairwise_correlation_max: float = 0.6
 
 
 @dataclass

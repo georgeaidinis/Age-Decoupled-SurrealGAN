@@ -50,40 +50,35 @@ def build_mlp(
 
 
 @dataclass
-class ModelOutputs:
-    age_latent: torch.Tensor
-    process_latents: torch.Tensor
+class GeneratorOutputs:
     fake_target: torch.Tensor
-    fake_delta: torch.Tensor
-    age_delta: torch.Tensor
-    process_deltas: torch.Tensor
-    age_latent_recon: torch.Tensor
-    process_latent_recon: torch.Tensor
-    age_adversary_pred: torch.Tensor
-    identity_target: torch.Tensor
+    total_delta: torch.Tensor
+    age_component: torch.Tensor
+    process_components: torch.Tensor
+    age_basis: torch.Tensor
+    process_bases: torch.Tensor
 
 
 class AgeDecoupledSurrealGAN(nn.Module):
+    model_version = "v2_sampled_additive"
+
     def __init__(self, n_features: int, config: ProjectConfig):
         super().__init__()
         self.n_features = n_features
         self.n_processes = config.model.n_processes
         self.age_latent_dim = config.model.age_latent_dim
 
-        latent_dim = self.age_latent_dim + self.n_processes
+        trunk_dim = config.model.generator_hidden_dims[-1]
+        self.generator_trunk = build_mlp(
+            n_features,
+            config.model.generator_hidden_dims[:-1],
+            trunk_dim,
+            config.model.dropout,
+            final_activation=nn.LeakyReLU(0.2, inplace=True),
+        )
+        self.age_basis_head = nn.Linear(trunk_dim, n_features)
+        self.process_basis_head = nn.Linear(trunk_dim, n_features * self.n_processes)
 
-        self.encoder = build_mlp(
-            n_features,
-            config.model.encoder_hidden_dims,
-            latent_dim,
-            config.model.dropout,
-        )
-        self.generator = build_mlp(
-            n_features + latent_dim,
-            config.model.generator_hidden_dims,
-            n_features,
-            config.model.dropout,
-        )
         self.decomposer = build_mlp(
             n_features,
             config.model.decomposer_hidden_dims,
@@ -92,7 +87,7 @@ class AgeDecoupledSurrealGAN(nn.Module):
         )
         self.age_reconstructor = build_mlp(
             n_features,
-            [max(32, config.model.decomposer_hidden_dims[-1] // 2)],
+            [max(32, config.model.encoder_hidden_dims[-1] // 2)],
             self.age_latent_dim,
             config.model.dropout,
         )
@@ -100,7 +95,7 @@ class AgeDecoupledSurrealGAN(nn.Module):
             [
                 build_mlp(
                     n_features,
-                    [max(32, config.model.decomposer_hidden_dims[-1] // 2)],
+                    [max(32, config.model.encoder_hidden_dims[-1] // 2)],
                     1,
                     config.model.dropout,
                 )
@@ -120,12 +115,31 @@ class AgeDecoupledSurrealGAN(nn.Module):
             config.model.dropout,
         )
 
-    def encode(self, target_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        latent = torch.sigmoid(self.encoder(target_features))
-        age_latent = latent[:, : self.age_latent_dim]
-        process_latents = latent[:, self.age_latent_dim :]
-        return age_latent, process_latents
+    def generator_bases(self, reference_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        context = self.generator_trunk(reference_features)
+        age_basis = self.age_basis_head(context)
+        process_bases = self.process_basis_head(context).view(reference_features.shape[0], self.n_processes, self.n_features)
+        return age_basis, process_bases
 
+    def synthesize_full(
+        self,
+        reference_features: torch.Tensor,
+        age_latent: torch.Tensor,
+        process_latents: torch.Tensor,
+    ) -> GeneratorOutputs:
+        age_basis, process_bases = self.generator_bases(reference_features)
+        age_component = age_latent * age_basis
+        process_components = process_latents.unsqueeze(-1) * process_bases
+        total_delta = age_component + process_components.sum(dim=1)
+        fake_target = reference_features + total_delta
+        return GeneratorOutputs(
+            fake_target=fake_target,
+            total_delta=total_delta,
+            age_component=age_component,
+            process_components=process_components,
+            age_basis=age_basis,
+            process_bases=process_bases,
+        )
 
     def synthesize(
         self,
@@ -133,79 +147,48 @@ class AgeDecoupledSurrealGAN(nn.Module):
         age_latent: torch.Tensor,
         process_latents: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        latent = torch.cat([age_latent, process_latents], dim=1)
-        delta = self.generator(torch.cat([reference_features, latent], dim=1))
-        fake_target = reference_features + delta
-        return fake_target, delta
+        outputs = self.synthesize_full(reference_features, age_latent, process_latents)
+        return outputs.fake_target, outputs.total_delta
 
-
-    def decompose(self, delta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        decomposition = self.decomposer(delta).view(delta.shape[0], self.n_processes + 1, self.n_features)
-        age_delta = decomposition[:, 0, :]
-        process_deltas = decomposition[:, 1:, :]
-        return age_delta, process_deltas
-
+    def decompose(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        decomposition = self.decomposer(features).view(features.shape[0], self.n_processes + 1, self.n_features)
+        age_component = decomposition[:, 0, :]
+        process_components = decomposition[:, 1:, :]
+        return age_component, process_components
 
     def reconstruct_latents(
         self,
-        age_delta: torch.Tensor,
-        process_deltas: torch.Tensor,
+        age_component: torch.Tensor,
+        process_components: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        age_recon = torch.sigmoid(self.age_reconstructor(age_delta))
-        process_recon = torch.cat(
-            [torch.sigmoid(head(process_deltas[:, idx, :])) for idx, head in enumerate(self.process_reconstructors)],
+        age_latent = torch.sigmoid(self.age_reconstructor(age_component))
+        process_latents = torch.cat(
+            [torch.sigmoid(head(process_components[:, idx, :])) for idx, head in enumerate(self.process_reconstructors)],
             dim=1,
         )
-        return age_recon, process_recon
+        return age_latent, process_latents
 
+    def infer_latents(self, target_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        age_component, process_components = self.decompose(target_features)
+        age_latent, process_latents = self.reconstruct_latents(age_component, process_components)
+        return age_latent, process_latents, age_component, process_components
 
     def discriminate(self, features: torch.Tensor) -> torch.Tensor:
         return self.discriminator(features)
 
-
     def predict_age_from_process(self, process_latents: torch.Tensor, reverse: bool = True) -> torch.Tensor:
-        adversary_inputs = grad_reverse(process_latents) if reverse else process_latents
-        return torch.sigmoid(self.age_adversary(adversary_inputs))
-
-
-    def forward(self, reference_features: torch.Tensor, target_features: torch.Tensor) -> ModelOutputs:
-        age_latent, process_latents = self.encode(target_features)
-        fake_target, fake_delta = self.synthesize(reference_features, age_latent, process_latents)
-        age_delta, process_deltas = self.decompose(fake_delta)
-        age_latent_recon, process_latent_recon = self.reconstruct_latents(age_delta, process_deltas)
-        age_adversary_pred = self.predict_age_from_process(process_latents, reverse=True)
-
-        zeros_age = torch.zeros(reference_features.shape[0], self.age_latent_dim, device=reference_features.device)
-        zeros_process = torch.zeros(reference_features.shape[0], self.n_processes, device=reference_features.device)
-        identity_target, _ = self.synthesize(reference_features, zeros_age, zeros_process)
-        return ModelOutputs(
-            age_latent=age_latent,
-            process_latents=process_latents,
-            fake_target=fake_target,
-            fake_delta=fake_delta,
-            age_delta=age_delta,
-            process_deltas=process_deltas,
-            age_latent_recon=age_latent_recon,
-            process_latent_recon=process_latent_recon,
-            age_adversary_pred=age_adversary_pred,
-            identity_target=identity_target,
-        )
-
+        inputs = grad_reverse(process_latents) if reverse else process_latents
+        return torch.sigmoid(self.age_adversary(inputs))
 
     @torch.no_grad()
-    def infer(
-        self,
-        target_features: torch.Tensor,
-        reference_template: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        age_latent, process_latents = self.encode(target_features)
+    def infer(self, target_features: torch.Tensor, reference_template: torch.Tensor) -> dict[str, torch.Tensor]:
+        age_latent, process_latents, age_component, process_components = self.infer_latents(target_features)
         fake_target, fake_delta = self.synthesize(reference_template, age_latent, process_latents)
-        age_delta, process_deltas = self.decompose(fake_delta)
         return {
             "age_latent": age_latent,
             "process_latents": process_latents,
             "synthetic_target": fake_target,
             "synthetic_delta": fake_delta,
-            "age_delta": age_delta,
-            "process_deltas": process_deltas,
+            "age_delta": age_component,
+            "process_deltas": process_components,
         }

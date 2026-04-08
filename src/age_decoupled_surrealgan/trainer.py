@@ -18,18 +18,22 @@ from torch.utils.data import DataLoader
 from .analysis_artifacts import build_run_analysis_artifacts
 from .config import ProjectConfig, default_config_path
 from .data.dataset import CohortDataset
+from .data.normalization import apply_feature_normalization, load_normalization_stats, normalization_payload_from_stats
 from .evaluation import aggregate_repetition_predictions, evaluate_prediction_frame, save_metrics, save_prediction_frame
-from .inference import normalize_age_years, resolve_device
+from .inference import load_checkpoint, normalize_age_years, resolve_device
 from .losses import (
     change_magnitude_loss,
     correlation_penalty,
     covariance_penalty,
     discriminator_loss,
+    generator_redundancy_loss,
+    generator_separation_margin_loss,
     generator_adversarial_loss,
     latent_sparsity_loss,
     monotonicity_loss,
     nonpositive_change_loss,
     orthogonality_loss,
+    pairwise_latent_correlation_penalty,
 )
 from .metrics import summarize_latent_sensitivity
 from .model import AgeDecoupledSurrealGAN
@@ -64,12 +68,36 @@ class AgeDecoupledTrainer:
             self.manifest = json.load(handle)
         self.feature_columns = self.manifest["feature_columns"]
         self.n_features = len(self.feature_columns)
-        self.reference_template = pd.read_csv(self.processed_dir / "reference_template.csv").set_index("feature_name")[
+        self.normalization_stats = load_normalization_stats(self.processed_dir / "normalization_stats.csv")
+        self.normalization = normalization_payload_from_stats(self.normalization_stats)
+        self.normalization_scale = (
+            self.normalization_stats.set_index("feature_name")["scale"].reindex(self.feature_columns).to_numpy(dtype="float32")
+        )
+        self.reference_template_raw = pd.read_csv(self.processed_dir / "reference_template.csv").set_index("feature_name")[
             "value"
         ]
+        normalized_path = self.processed_dir / "reference_template_normalized.csv"
+        if normalized_path.exists():
+            self.reference_template = pd.read_csv(normalized_path).set_index("feature_name")["value"]
+        else:
+            normalized_values = apply_feature_normalization(
+                self.reference_template_raw.reindex(self.feature_columns),
+                self.normalization,
+                self.feature_columns,
+            ).reshape(-1)
+            self.reference_template = pd.Series(normalized_values, index=self.feature_columns)
         self.device = resolve_device(config.training.device)
         self.reference_template_abs_max = float(self.reference_template.abs().max())
         self.reference_template_abs_mean = float(self.reference_template.abs().mean())
+        self.reference_template_raw_abs_max = float(self.reference_template_raw.abs().max())
+        self.reference_template_raw_abs_mean = float(self.reference_template_raw.abs().mean())
+
+    def _scale_tensor(self, device: torch.device) -> torch.Tensor:
+        return torch.tensor(self.normalization_scale, dtype=torch.float32, device=device)
+
+    def _raw_delta_from_normalized(self, delta: torch.Tensor) -> torch.Tensor:
+        scale = self._scale_tensor(delta.device)
+        return delta * scale
 
     def _check_finite_tensor(self, name: str, value: torch.Tensor) -> None:
         if torch.isfinite(value).all():
@@ -86,6 +114,9 @@ class AgeDecoupledTrainer:
             "amp_enabled": bool(self.config.training.use_amp and self.device.type == "cuda"),
             "reference_template_abs_mean": self.reference_template_abs_mean,
             "reference_template_abs_max": self.reference_template_abs_max,
+            "reference_template_raw_abs_mean": self.reference_template_raw_abs_mean,
+            "reference_template_raw_abs_max": self.reference_template_raw_abs_max,
+            "roi_normalization": self.normalization.get("method", "none"),
         }
         raise RuntimeError(
             "Non-finite tensor encountered during training. "
@@ -125,9 +156,10 @@ class AgeDecoupledTrainer:
         self,
         model: AgeDecoupledSurrealGAN,
         reference_features: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        reference_raw: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch = reference_features.shape[0]
-        baseline_abs = reference_features.abs().clamp_min(1.0)
+        baseline_abs = reference_raw.abs().clamp_min(1.0)
         zero_process = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
         age_low = self._age_tensor(self.config.data.age_latent_normalization_min, batch, reference_features.device)
         age_high = self._age_tensor(self.config.data.age_latent_normalization_max, batch, reference_features.device)
@@ -137,22 +169,24 @@ class AgeDecoupledTrainer:
             reference_features.device,
         )
 
-        fake_low_age, _ = model.synthesize(reference_features, age_low, zero_process)
-        fake_high_age, _ = model.synthesize(reference_features, age_high, zero_process)
-        age_sensitivity_pct = ((fake_high_age - fake_low_age).abs() / baseline_abs).mean() * 100.0
-        age_shrinkage_penalty = nonpositive_change_loss(fake_high_age - fake_low_age)
+        _, low_delta_norm = model.synthesize(reference_features, age_low, zero_process)
+        _, high_delta_norm = model.synthesize(reference_features, age_high, zero_process)
+        age_delta_raw = self._raw_delta_from_normalized(high_delta_norm - low_delta_norm)
+        age_sensitivity_pct = ((age_delta_raw.abs() / baseline_abs).mean() * 100.0)
+        age_shrinkage_penalty = nonpositive_change_loss(age_delta_raw)
 
         process_responses: list[torch.Tensor] = []
         process_targets: list[torch.Tensor] = []
         process_shrinkage_penalties: list[torch.Tensor] = []
-        fake_anchor_process, _ = model.synthesize(reference_features, process_anchor_age, zero_process)
+        _, anchor_delta_norm = model.synthesize(reference_features, process_anchor_age, zero_process)
         for idx in range(self.config.model.n_processes):
             process_latents = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
             process_latents[:, idx] = 1.0
-            fake_process, _ = model.synthesize(reference_features, process_anchor_age, process_latents)
-            process_targets.append(fake_process)
-            process_responses.append(((fake_process - fake_anchor_process).abs() / baseline_abs).mean() * 100.0)
-            process_shrinkage_penalties.append(nonpositive_change_loss(fake_process - fake_anchor_process))
+            _, process_delta_norm = model.synthesize(reference_features, process_anchor_age, process_latents)
+            process_delta_raw = self._raw_delta_from_normalized(process_delta_norm - anchor_delta_norm)
+            process_targets.append(process_delta_raw)
+            process_responses.append(((process_delta_raw.abs() / baseline_abs).mean() * 100.0))
+            process_shrinkage_penalties.append(nonpositive_change_loss(process_delta_raw))
 
         mean_process_sensitivity_pct = (
             torch.stack(process_responses).mean() if process_responses else torch.tensor(0.0, device=reference_features.device)
@@ -166,6 +200,21 @@ class AgeDecoupledTrainer:
             if pairwise_distances
             else torch.tensor(0.0, device=reference_features.device)
         )
+        pairwise_pattern_corrs: list[torch.Tensor] = []
+        for i in range(len(process_targets)):
+            for j in range(i + 1, len(process_targets)):
+                lhs = process_targets[i].mean(dim=0)
+                rhs = process_targets[j].mean(dim=0)
+                lhs_centered = lhs - lhs.mean()
+                rhs_centered = rhs - rhs.mean()
+                numerator = (lhs_centered * rhs_centered).mean()
+                denominator = lhs_centered.std().clamp_min(1e-6) * rhs_centered.std().clamp_min(1e-6)
+                pairwise_pattern_corrs.append((numerator / denominator).abs())
+        process_pattern_correlation = (
+            torch.stack(pairwise_pattern_corrs).mean()
+            if pairwise_pattern_corrs
+            else torch.tensor(0.0, device=reference_features.device)
+        )
         mean_process_shrinkage_penalty = (
             torch.stack(process_shrinkage_penalties).mean()
             if process_shrinkage_penalties
@@ -175,6 +224,7 @@ class AgeDecoupledTrainer:
             age_sensitivity_pct,
             mean_process_sensitivity_pct,
             process_separation_pct,
+            process_pattern_correlation,
             age_shrinkage_penalty,
             mean_process_shrinkage_penalty,
         )
@@ -187,6 +237,7 @@ class AgeDecoupledTrainer:
                 age_sensitivity_pct_mean=0.0,
                 process_sensitivity_pct_means={f"r{i + 1}": 0.0 for i in range(self.config.model.n_processes)},
                 process_separation_pct_mean=0.0,
+                process_pattern_correlation_abs_mean=0.0,
                 age_positive_change_pct_mean=0.0,
                 process_positive_change_pct_means={f"r{i + 1}": 0.0 for i in range(self.config.model.n_processes)},
             )
@@ -194,30 +245,35 @@ class AgeDecoupledTrainer:
         sample_n = min(len(frame), self.config.training.sensitivity_eval_subjects)
         if sample_n < len(frame):
             frame = frame.sample(sample_n, random_state=self.config.data.split_seed)
-        reference_features = torch.tensor(frame[self.feature_columns].to_numpy(dtype="float32"), device=self.device)
+        reference_raw = torch.tensor(frame[self.feature_columns].to_numpy(dtype="float32"), device=self.device)
+        reference_features = torch.tensor(
+            apply_feature_normalization(frame[self.feature_columns], self.normalization, self.feature_columns),
+            dtype=torch.float32,
+            device=self.device,
+        )
         batch = reference_features.shape[0]
-        baseline_abs = reference_features.abs().clamp_min(1.0)
+        baseline_abs = reference_raw.abs().clamp_min(1.0)
         zero_process = torch.zeros(batch, self.config.model.n_processes, device=self.device)
         age_low = self._age_tensor(self.config.data.age_latent_normalization_min, batch, self.device)
         age_high = self._age_tensor(self.config.data.age_latent_normalization_max, batch, self.device)
         anchor_age = self._age_tensor(self.config.training.sensitivity_process_anchor_age, batch, self.device)
 
-        fake_low_age, _ = model.synthesize(reference_features, age_low, zero_process)
-        fake_high_age, _ = model.synthesize(reference_features, age_high, zero_process)
-        age_delta = fake_high_age - fake_low_age
+        _, low_delta_norm = model.synthesize(reference_features, age_low, zero_process)
+        _, high_delta_norm = model.synthesize(reference_features, age_high, zero_process)
+        age_delta = self._raw_delta_from_normalized(high_delta_norm - low_delta_norm)
         age_sensitivity = float(((age_delta.abs() / baseline_abs).mean() * 100.0).cpu())
         age_positive_change = float((((age_delta.clamp_min(0.0)) / baseline_abs).mean() * 100.0).cpu())
 
         process_metrics: dict[str, float] = {}
         process_positive_metrics: dict[str, float] = {}
         process_targets: list[torch.Tensor] = []
-        fake_anchor_process, _ = model.synthesize(reference_features, anchor_age, zero_process)
+        _, anchor_delta_norm = model.synthesize(reference_features, anchor_age, zero_process)
         for idx in range(self.config.model.n_processes):
             process_latents = torch.zeros(batch, self.config.model.n_processes, device=self.device)
             process_latents[:, idx] = 1.0
-            fake_process, _ = model.synthesize(reference_features, anchor_age, process_latents)
-            process_targets.append(fake_process)
-            process_delta = fake_process - fake_anchor_process
+            _, process_delta_norm = model.synthesize(reference_features, anchor_age, process_latents)
+            process_delta = self._raw_delta_from_normalized(process_delta_norm - anchor_delta_norm)
+            process_targets.append(process_delta)
             process_metrics[f"r{idx + 1}"] = float(((process_delta.abs() / baseline_abs).mean() * 100.0).cpu())
             process_positive_metrics[f"r{idx + 1}"] = float(
                 (((process_delta.clamp_min(0.0)) / baseline_abs).mean() * 100.0).cpu()
@@ -229,10 +285,21 @@ class AgeDecoupledTrainer:
                 value = (((process_targets[i] - process_targets[j]).abs() / baseline_abs).mean() * 100.0).cpu()
                 pairwise_distances.append(float(value))
         process_separation = float(np.mean(pairwise_distances)) if pairwise_distances else 0.0
+        pairwise_pattern_corrs: list[float] = []
+        for i in range(len(process_targets)):
+            for j in range(i + 1, len(process_targets)):
+                lhs = process_targets[i].mean(dim=0).detach().cpu().numpy()
+                rhs = process_targets[j].mean(dim=0).detach().cpu().numpy()
+                centered_lhs = lhs - lhs.mean()
+                centered_rhs = rhs - rhs.mean()
+                denominator = max(np.std(centered_lhs) * np.std(centered_rhs), 1.0e-8)
+                pairwise_pattern_corrs.append(float(abs((centered_lhs * centered_rhs).mean() / denominator)))
+        process_pattern_correlation = float(np.mean(pairwise_pattern_corrs)) if pairwise_pattern_corrs else 0.0
         return summarize_latent_sensitivity(
             age_sensitivity_pct_mean=age_sensitivity,
             process_sensitivity_pct_means=process_metrics,
             process_separation_pct_mean=process_separation,
+            process_pattern_correlation_abs_mean=process_pattern_correlation,
             age_positive_change_pct_mean=age_positive_change,
             process_positive_change_pct_means=process_positive_metrics,
         )
@@ -259,6 +326,7 @@ class AgeDecoupledTrainer:
             feature_columns=self.feature_columns,
             age_min=self.config.data.age_latent_normalization_min,
             age_max=self.config.data.age_latent_normalization_max,
+            normalization_payload=self.normalization,
         )
         return DataLoader(
             dataset,
@@ -291,7 +359,10 @@ class AgeDecoupledTrainer:
             "n_processes": self.config.model.n_processes,
             "feature_columns": self.feature_columns,
             "reference_template": self.reference_template.to_dict(),
+            "reference_template_raw": self.reference_template_raw.to_dict(),
+            "normalization": self.normalization,
             "config": self.config.as_dict(),
+            "model_version": getattr(model, "model_version", "v2_sampled_additive"),
             "optimizer_g_state": optimizer_g.state_dict() if optimizer_g is not None else None,
             "optimizer_d_state": optimizer_d.state_dict() if optimizer_d is not None else None,
             "scaler_state": scaler.state_dict() if scaler is not None else None,
@@ -334,7 +405,8 @@ class AgeDecoupledTrainer:
         split_name: str,
     ) -> pd.DataFrame:
         frame = self._load_split(split_name)
-        features = torch.tensor(frame[self.feature_columns].values, dtype=torch.float32, device=self.device)
+        feature_values = apply_feature_normalization(frame[self.feature_columns], self.normalization, self.feature_columns)
+        features = torch.tensor(feature_values, dtype=torch.float32, device=self.device)
         reference_values = torch.tensor(
             self.reference_template[self.feature_columns].values,
             dtype=torch.float32,
@@ -355,15 +427,47 @@ class AgeDecoupledTrainer:
         prediction_frame = self._predict_split(model, split_name)
         metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
         sensitivity_metrics = self._compute_latent_sensitivity_metrics(model, split_name)
+        latent_collapse = float(metrics.get("process_latent_pairwise_correlation_abs_mean", 0.0))
         metrics = {
             **metrics,
             **sensitivity_metrics,
-            "quality_score": float(metrics["composite_score"] + 0.25 * sensitivity_metrics["latent_sensitivity_score"]),
+            "quality_score": float(
+                metrics["composite_score"]
+                + 0.25 * sensitivity_metrics["latent_sensitivity_score"]
+                - 0.5 * latent_collapse
+            ),
             "directional_quality_score": float(
-                metrics["composite_score"] + 0.25 * sensitivity_metrics["directional_latent_sensitivity_score"]
+                metrics["composite_score"]
+                + 0.25 * sensitivity_metrics["directional_latent_sensitivity_score"]
+                - 0.5 * latent_collapse
+            ),
+            "collapse_aware_quality_score": float(
+                metrics["composite_score"]
+                + 0.25 * sensitivity_metrics["collapse_aware_latent_sensitivity_score"]
+                - 0.75 * latent_collapse
             ),
         }
         return metrics, prediction_frame
+
+    def _sample_process_latents(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        if not self.config.training.sampled_process_one_hot_only:
+            return torch.rand(batch_size, self.config.model.n_processes, device=device)
+        indices = torch.randint(0, self.config.model.n_processes, (batch_size,), device=device)
+        values = torch.rand(batch_size, 1, device=device).clamp_min(1.0e-6)
+        latents = torch.zeros(batch_size, self.config.model.n_processes, device=device)
+        latents.scatter_(1, indices.unsqueeze(1), values)
+        return latents
+
+    def _sample_later_process_latents(self, process_latents: torch.Tensor) -> torch.Tensor:
+        if not self.config.training.sampled_process_one_hot_only:
+            later = process_latents + (1.0 - process_latents) * torch.rand_like(process_latents)
+            return later.clamp(0.0, 1.0)
+        later = process_latents.clone()
+        active = process_latents.argmax(dim=1, keepdim=True)
+        active_values = later.gather(1, active)
+        later_values = active_values + (1.0 - active_values) * torch.rand_like(active_values)
+        later.scatter_(1, active, later_values)
+        return later.clamp(0.0, 1.0)
 
     def _train_epoch(
         self,
@@ -382,70 +486,90 @@ class AgeDecoupledTrainer:
         for reference_batch in reference_loader:
             target_batch = next(target_iterator)
             ref_x = reference_batch["features"].to(self.device)
+            ref_x_raw = reference_batch["raw_features"].to(self.device)
             ref_age = reference_batch["age_norm"].to(self.device).unsqueeze(1)
             tar_x = target_batch["features"].to(self.device)
             tar_age = target_batch["age_norm"].to(self.device).unsqueeze(1)
+            sampled_age = tar_age
+            sampled_process = self._sample_process_latents(ref_x.shape[0], self.device)
+            sampled_process_later = self._sample_later_process_latents(sampled_process)
             self._check_finite_tensor("batch::ref_x", ref_x)
             self._check_finite_tensor("batch::tar_x", tar_x)
 
-            with autocast('cuda', enabled=amp_enabled):
-                outputs = model(ref_x, tar_x)
-                self._check_finite_tensor("output::fake_target_detached", outputs.fake_target.detach())
+            with autocast("cuda", enabled=amp_enabled):
+                synth_pre = model.synthesize_full(ref_x, sampled_age, sampled_process)
+                self._check_finite_tensor("output::fake_target_detached", synth_pre.fake_target.detach())
                 d_loss = discriminator_loss(
                     model.discriminate(tar_x),
-                    model.discriminate(outputs.fake_target.detach()),
+                    model.discriminate(synth_pre.fake_target.detach()),
                 )
                 self._check_finite_tensor("loss::discriminator", d_loss)
             optimizer_d.zero_grad(set_to_none=True)
             scaler.scale(d_loss).backward()
             scaler.step(optimizer_d)
 
-            with autocast('cuda', enabled=amp_enabled):
-                outputs = model(ref_x, tar_x)
-                self._check_finite_tensor("output::age_latent", outputs.age_latent)
-                self._check_finite_tensor("output::process_latents", outputs.process_latents)
-                self._check_finite_tensor("output::fake_target", outputs.fake_target)
-                self._check_finite_tensor("output::fake_delta", outputs.fake_delta)
-                fake_logits = model.discriminate(outputs.fake_target)
+            with autocast("cuda", enabled=amp_enabled):
+                synth_pre = model.synthesize_full(ref_x, sampled_age, sampled_process)
+                synth_later = model.synthesize_full(ref_x, sampled_age, sampled_process_later)
+                self._check_finite_tensor("output::fake_target", synth_pre.fake_target)
+                self._check_finite_tensor("output::fake_delta", synth_pre.total_delta)
+                fake_logits = model.discriminate(synth_pre.fake_target)
                 self._check_finite_tensor("output::fake_logits", fake_logits)
-                _, low_delta = model.synthesize(
+                low_activation_age = torch.rand_like(sampled_age) * self.config.training.low_activation_max
+                low_activation_process = torch.rand_like(sampled_process) * self.config.training.low_activation_max
+                zero_identity = model.synthesize_full(
                     ref_x,
-                    outputs.age_latent,
-                    outputs.process_latents * 0.5,
+                    torch.zeros_like(sampled_age),
+                    torch.zeros_like(sampled_process),
                 )
-                low_activation_age = torch.rand_like(outputs.age_latent) * self.config.losses.low_activation_max
-                low_activation_process = (
-                    torch.rand_like(outputs.process_latents) * self.config.losses.low_activation_max
+                low_identity = model.synthesize_full(ref_x, low_activation_age, low_activation_process)
+
+                fake_age_component_pred, fake_process_components_pred = model.decompose(synth_pre.fake_target)
+                fake_age_latent_recon, fake_process_latent_recon = model.reconstruct_latents(
+                    fake_age_component_pred,
+                    fake_process_components_pred,
                 )
-                low_identity_target, _ = model.synthesize(ref_x, low_activation_age, low_activation_process)
-                ref_age_latent, ref_process_latents = model.encode(ref_x)
-                total_delta = outputs.age_delta + outputs.process_deltas.sum(dim=1)
+                real_age_latent, real_process_latents, _, _ = model.infer_latents(tar_x)
+                ref_age_latent, ref_process_latents, _, _ = model.infer_latents(ref_x)
+                real_age_adversary_pred = model.predict_age_from_process(real_process_latents, reverse=True)
+
                 losses = {
                     "adv": generator_adversarial_loss(fake_logits),
-                    "age_sup": F.mse_loss(outputs.age_latent, tar_age),
+                    "age_sup": F.mse_loss(real_age_latent, tar_age),
                     "ref_age_sup": F.mse_loss(ref_age_latent, ref_age),
-                    "age_adv": F.mse_loss(outputs.age_adversary_pred, tar_age),
-                    "latent_recon": F.mse_loss(outputs.age_latent_recon, outputs.age_latent.detach())
-                    + F.mse_loss(outputs.process_latent_recon, outputs.process_latents.detach()),
-                    "decompose": F.mse_loss(total_delta, outputs.fake_delta),
-                    "identity": F.l1_loss(outputs.identity_target, ref_x),
-                    "monotonicity": monotonicity_loss(low_delta, outputs.fake_delta),
-                    "orthogonality": orthogonality_loss(outputs.process_deltas),
-                    "covariance": covariance_penalty(outputs.age_latent, outputs.process_latents),
+                    "age_adv": F.mse_loss(real_age_adversary_pred, tar_age),
+                    "latent_recon": F.mse_loss(fake_age_latent_recon, sampled_age.detach())
+                    + F.mse_loss(fake_process_latent_recon, sampled_process.detach()),
+                    "decompose": F.mse_loss(fake_age_component_pred, synth_pre.age_component.detach())
+                    + F.mse_loss(fake_process_components_pred, synth_pre.process_components.detach()),
+                    "identity": F.l1_loss(zero_identity.fake_target, ref_x),
+                    "monotonicity": monotonicity_loss(
+                        synth_pre.process_components.reshape(-1, self.n_features),
+                        synth_later.process_components.reshape(-1, self.n_features),
+                    ),
+                    "orthogonality": orthogonality_loss(synth_pre.process_bases),
+                    "covariance": covariance_penalty(real_age_latent, real_process_latents),
                     "reference_process": ref_process_latents.abs().mean(),
-                    "change_mag": change_magnitude_loss(outputs.fake_delta),
-                    "low_identity": F.l1_loss(low_identity_target, ref_x),
-                    "process_age_corr": correlation_penalty(outputs.process_latents, tar_age),
-                    "process_sparse": latent_sparsity_loss(outputs.process_latents),
+                    "change_mag": change_magnitude_loss(synth_pre.total_delta),
+                    "low_identity": F.l1_loss(low_identity.fake_target, ref_x),
+                    "process_age_corr": correlation_penalty(real_process_latents, tar_age),
+                    "process_sparse": latent_sparsity_loss(real_process_latents),
+                    "generator_separation": generator_separation_margin_loss(
+                        synth_pre.process_bases, self.config.model.process_separation_margin
+                    ),
+                    "generator_redundancy": generator_redundancy_loss(synth_pre.process_bases),
+                    "latent_pair_corr": pairwise_latent_correlation_penalty(real_process_latents),
                 }
                 sensitivity_reference = ref_x[: min(ref_x.shape[0], 16)]
+                sensitivity_reference_raw = ref_x_raw[: min(ref_x_raw.shape[0], 16)]
                 (
                     age_sensitivity_pct,
                     process_sensitivity_pct,
                     process_separation_pct,
+                    process_pattern_correlation,
                     age_shrinkage_penalty,
                     process_shrinkage_penalty,
-                ) = self._latent_sensitivity_batch_metrics(model, sensitivity_reference)
+                ) = self._latent_sensitivity_batch_metrics(model, sensitivity_reference, sensitivity_reference_raw)
                 losses["age_sensitivity"] = torch.relu(
                     torch.tensor(self.config.losses.age_sensitivity_target_pct, device=ref_x.device) - age_sensitivity_pct
                 )
@@ -477,6 +601,9 @@ class AgeDecoupledTrainer:
                         "process_sensitivity": self.config.losses.process_sensitivity,
                         "age_shrinkage": self.config.losses.age_shrinkage,
                         "process_shrinkage": self.config.losses.process_shrinkage,
+                        "generator_separation": self.config.losses.generator_process_separation,
+                        "generator_redundancy": self.config.losses.generator_process_redundancy,
+                        "latent_pair_corr": self.config.losses.process_latent_pairwise_correlation,
                     },
                 )
             optimizer_g.zero_grad(set_to_none=True)
@@ -487,12 +614,13 @@ class AgeDecoupledTrainer:
             scaler.update()
 
             state_metrics = {
-                "state_age_latent_mean": outputs.age_latent.mean(),
-                "state_process_latent_abs_mean": outputs.process_latents.abs().mean(),
-                "state_fake_change_abs_mean": outputs.fake_delta.abs().mean(),
+                "state_age_latent_mean": real_age_latent.mean(),
+                "state_process_latent_abs_mean": real_process_latents.abs().mean(),
+                "state_fake_change_abs_mean": self._raw_delta_from_normalized(synth_pre.total_delta).abs().mean(),
                 "state_age_sensitivity_pct": age_sensitivity_pct.detach(),
                 "state_process_sensitivity_pct": process_sensitivity_pct.detach(),
                 "state_process_separation_pct": process_separation_pct.detach(),
+                "state_process_pattern_corr": process_pattern_correlation.detach(),
                 "state_age_growth_penalty": age_shrinkage_penalty.detach(),
                 "state_process_growth_penalty": process_shrinkage_penalty.detach(),
             }
@@ -574,11 +702,13 @@ class AgeDecoupledTrainer:
         startup_lines.extend(
             [
                 (
-                    "Reference scale: "
-                    f"abs_mean={self.reference_template_abs_mean:.2f}, abs_max={self.reference_template_abs_max:.2f}"
+                    "Reference scale (normalized/raw): "
+                    f"norm_abs_mean={self.reference_template_abs_mean:.2f}, norm_abs_max={self.reference_template_abs_max:.2f}, "
+                    f"raw_abs_mean={self.reference_template_raw_abs_mean:.2f}, raw_abs_max={self.reference_template_raw_abs_max:.2f}"
                 ),
                 (
-                    "AMP guidance: raw ROI inputs are not normalized; fp16 autocast on CUDA can be unstable. "
+                    "ROI normalization: "
+                    f"method={self.normalization.get('method', 'none')}, clip={self.normalization.get('clip')}, "
                     f"use_amp={self.config.training.use_amp}"
                 ),
             ]
@@ -619,8 +749,9 @@ class AgeDecoupledTrainer:
             )
 
             optimizer_g = AdamW(
-                list(model.encoder.parameters())
-                + list(model.generator.parameters())
+                list(model.generator_trunk.parameters())
+                + list(model.age_basis_head.parameters())
+                + list(model.process_basis_head.parameters())
                 + list(model.decomposer.parameters())
                 + list(model.age_reconstructor.parameters())
                 + list(model.process_reconstructors.parameters())
@@ -740,8 +871,7 @@ class AgeDecoupledTrainer:
                     best_val_metrics = val_metrics
 
             if best_checkpoint.exists() and (best_val_frame is None or best_val_metrics is None):
-                best_model = AgeDecoupledSurrealGAN(self.n_features, self.config).to(self.device)
-                self._load_checkpoint_state(best_checkpoint, best_model)
+                best_model, _ = load_checkpoint(best_checkpoint, device=str(self.device))
                 if self.config.training.compile_model and hasattr(torch, "compile"):
                     best_model = torch.compile(best_model)  # type: ignore[assignment]
                 best_model.eval()
@@ -790,9 +920,7 @@ class AgeDecoupledTrainer:
         selected_checkpoint = Path(repetition_summaries[selected_repetition]["best_checkpoint"])
 
         selected_model_load_start = time.perf_counter()
-        best_model = AgeDecoupledSurrealGAN(self.n_features, self.config).to(self.device)
-        checkpoint = torch.load(selected_checkpoint, map_location=self.device)
-        best_model.load_state_dict(checkpoint["model_state"])
+        best_model, checkpoint = load_checkpoint(selected_checkpoint, device=str(self.device))
         best_model.eval()
         selected_model_load_seconds = time.perf_counter() - selected_model_load_start
 
@@ -809,12 +937,24 @@ class AgeDecoupledTrainer:
             metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
             sensitivity_metrics = self._compute_latent_sensitivity_metrics(best_model, split_name)
             evaluation_seconds = time.perf_counter() - evaluation_timer_start
+            latent_collapse = float(metrics.get("process_latent_pairwise_correlation_abs_mean", 0.0))
             metrics = {
                 **metrics,
                 **sensitivity_metrics,
-                "quality_score": float(metrics["composite_score"] + 0.25 * sensitivity_metrics["latent_sensitivity_score"]),
+                "quality_score": float(
+                    metrics["composite_score"]
+                    + 0.25 * sensitivity_metrics["latent_sensitivity_score"]
+                    - 0.5 * latent_collapse
+                ),
                 "directional_quality_score": float(
-                    metrics["composite_score"] + 0.25 * sensitivity_metrics["directional_latent_sensitivity_score"]
+                    metrics["composite_score"]
+                    + 0.25 * sensitivity_metrics["directional_latent_sensitivity_score"]
+                    - 0.5 * latent_collapse
+                ),
+                "collapse_aware_quality_score": float(
+                    metrics["composite_score"]
+                    + 0.25 * sensitivity_metrics["collapse_aware_latent_sensitivity_score"]
+                    - 0.75 * latent_collapse
                 ),
             }
             split_metrics[split_name] = metrics
