@@ -29,9 +29,7 @@ At training time:
 
 ## Generator
 
-The generator is not a simple latent-concatenation MLP anymore.
-
-It first builds a context representation:
+The generator first builds a context representation:
 
 $$
 h(x') = T(x')
@@ -61,8 +59,6 @@ and the synthetic target is:
 $$
 \hat y' = x' + \Delta(x', a, r).
 $$
-
-This is the main architectural reason the redesign is easier to interpret: each latent owns a basis response.
 
 ## Decomposer
 

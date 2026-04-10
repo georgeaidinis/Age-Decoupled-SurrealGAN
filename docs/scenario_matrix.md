@@ -1,12 +1,12 @@
 # Scenario Matrix
 
-This matrix describes the **redesign-era** train and tuning sweeps. The old pre-redesign scenario families are still present in the repo for historical comparison, but the default SLURM lists now point to the redesigned families below.
+This matrix describes the **redesign-era** train and tuning sweeps.
 
 ## Center of Gravity
 
 The scenario family is centered on the strong indicator run:
 
-- `20260407_233913_age-decoupled-surrealgan-redesign-train`
+- `20260409_221636_age-decoupled-surrealgan-redesign-train`
 
 That run succeeded because it combined:
 
