@@ -3,7 +3,7 @@
 #SBATCH --partition=ai
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:v100:1
+#SBATCH --gres=gpu:a40:1
 #SBATCH --mem=32G
 #SBATCH --time=20:00:00
 #SBATCH --output=slurm_logs/%x-%j.out
@@ -19,7 +19,7 @@ module load cuda/12.2
 
 PROJECT_ROOT="${PROJECT_ROOT:-/cbica/home/aidinisg/Projects/Age-Decoupled-SurrealGAN}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-age-decoupled-surrealgan}"
-CONFIG_PATH="${CONFIG_PATH:-src/age_decoupled_surrealgan/configs/extended_train.toml}"
+CONFIG_PATH="${CONFIG_PATH:-src/age_decoupled_surrealgan/configs/redesign_train.toml}"
 RESUME_RUN_DIR="${RESUME_RUN_DIR:-}"
 
 source activate "${CONDA_ENV_NAME}"

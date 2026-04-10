@@ -1,56 +1,111 @@
 # Pipeline Usage
 
-## Core Commands
+This page reflects the **redesigned normalized additive sampled-latent pipeline**.
 
-Prepare data:
+## 1. Prepare Data
+
+Whenever you change ROI filtering, cohort definitions, or normalization settings, regenerate the processed artifacts:
 
 ```bash
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli prepare-data
 ```
 
-Train:
+Important outputs under [`artifacts/data/processed`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/artifacts/data/processed):
+
+- `train.csv`, `val.csv`, `id_test.csv`, `ood_test.csv`, `application.csv`
+- `reference_template.csv`
+- `reference_template_normalized.csv`
+- `normalization_stats.csv`
+- `roi_metadata.csv`
+- `split_manifest.json`
+
+The redesigned model assumes these normalization artifacts exist.
+
+## 2. Baseline Training
+
+Default training:
 
 ```bash
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli train
 ```
 
-Train with override config:
+Redesign reference config:
 
 ```bash
-PYTHONPATH=src python -m age_decoupled_surrealgan.cli --config path/to/config.toml train
+PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
+  --config src/age_decoupled_surrealgan/configs/redesign_train.toml \
+  train
+```
+
+Quick smoke test:
+
+```bash
+PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
+  --config src/age_decoupled_surrealgan/configs/quickstart.toml \
+  train
 ```
 
 Resume an interrupted run:
 
 ```bash
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
-  --config path/to/config.toml \
+  --config src/age_decoupled_surrealgan/configs/redesign_train.toml \
   train --resume-run-dir runs/<existing_run_dir>
 ```
 
-Tune:
+## 3. Hyperparameter Tuning
 
-```bash
-PYTHONPATH=src python -m age_decoupled_surrealgan.cli tune
-```
-
-Resume tuning:
+Baseline redesign tuner:
 
 ```bash
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
-  --config src/age_decoupled_surrealgan/configs/extended_tune.toml \
+  --config src/age_decoupled_surrealgan/configs/redesign_tune.toml \
   tune
 ```
 
-If the tuning config uses SQLite storage with `resume_if_exists = true`, rerunning the same command continues the Optuna study.
+Tuning resumes automatically when the same Optuna study/storage path is reused.
 
-Serve the API:
+The redesign-era large sweeps use the scenario configs under:
+
+- [`src/age_decoupled_surrealgan/configs/scenarios/train`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/src/age_decoupled_surrealgan/configs/scenarios/train)
+- [`src/age_decoupled_surrealgan/configs/scenarios/tune`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/src/age_decoupled_surrealgan/configs/scenarios/tune)
+
+## 4. Backfill Analysis Artifacts
+
+If a run was trained before a new analysis feature existed, backfill its population patterns and summaries:
+
+```bash
+PYTHONPATH=src python -m age_decoupled_surrealgan.cli backfill-run-artifacts --force
+```
+
+For a single run:
+
+```bash
+PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
+  backfill-run-artifacts --run-dir runs/<run_dir> --force
+```
+
+The backfill command now prints progress in the form:
+
+```text
+[backfill 3/18] processing runs/...
+```
+
+## 5. Serve the API and GUI
+
+Start the backend:
 
 ```bash
 PYTHONPATH=src python -m age_decoupled_surrealgan.cli serve
 ```
 
-Run the frontend:
+Enable verbose API debugging:
+
+```bash
+AGE_DECOUPLED_SURREALGAN_DEBUG=1 PYTHONPATH=src python -m age_decoupled_surrealgan.cli serve
+```
+
+Frontend:
 
 ```bash
 cd webui
@@ -58,77 +113,88 @@ npm install
 npm run dev
 ```
 
-During local development, the Vite server proxies API requests to `127.0.0.1:8000`. If your API runs elsewhere, set `VITE_API_BASE_URL` or edit [`webui/vite.config.ts`](/Users/georgeaidinis/Desktop/PhD/Experiments/Age-Decoupled-SurrealGAN/webui/vite.config.ts).
+The GUI now supports:
 
-## Important Files
+- subject mode
+- precomputed population-factor mode
+- signed ROI overlays
+- crosshair ROI readout
+- latent-space exploration from saved prediction CSVs
 
-- `src/age_decoupled_surrealgan/data/prepare.py`: preprocessing and split generation
-- `src/age_decoupled_surrealgan/model.py`: model definition
-- `src/age_decoupled_surrealgan/trainer.py`: training loop
-- `src/age_decoupled_surrealgan/losses.py`: implemented objectives
-- `src/age_decoupled_surrealgan/metrics.py`: selection and analysis metrics
+## 6. What a Run Contains
 
-## Recommended Experiment Pattern
+Each run directory contains:
 
-1. Regenerate processed data if cohort or feature rules changed.
-2. Run a short quickstart config for smoke testing.
-3. Run the default config for a baseline.
-4. Run ablations by changing only one or two loss weights at a time.
-5. Compare:
-   - validation composite score
-   - validation quality score
-   - latent sensitivity metrics
-   - agreement across repetitions
-   - ID vs OOD behavior
+- `resolved_config.json`
+- `run_summary.json`
+- `metrics/*.csv`
+- `logs/train.log`
+- `predictions/<split>.csv`
+- `analysis/`
+- `tensorboard/repetition_*`
+- repetition checkpoints and a selected best checkpoint
 
-## Runtime Notes
+The GUI loads the checkpoint stored in:
 
-- On Apple Silicon with MPS, GPU utilization is usually the main limiter for this ROI model rather than CPU saturation.
-- `num_workers > 0` and `persistent_workers = true` can help only if data loading becomes a bottleneck.
-- The default checkpoint cadence now uses `save_every = 0` with `target_regular_checkpoints = 3`, which keeps artifact volume manageable while preserving training history.
-
-## Ready-Made Ablation Configs
-
-The repository includes minimal override configs in `src/age_decoupled_surrealgan/configs/ablations/`:
-
-- `change_magnitude.toml`
-- `low_activation_identity.toml`
-- `process_age_correlation.toml`
-
-Example:
-
-```bash
-PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
-  --config src/age_decoupled_surrealgan/configs/ablations/change_magnitude.toml \
-  train
+```text
+run_summary.json -> selected_checkpoint
 ```
 
-## Long-Run Presets
+## 7. Practical Workflow
 
-For longer laptop runs:
+Recommended loop:
 
-- `src/age_decoupled_surrealgan/configs/extended_train.toml`
-- `src/age_decoupled_surrealgan/configs/extended_tune.toml`
-- `scripts/run_laptop_experiments.sh`
-- `scripts/run_overnight_laptop.sh`
+1. `prepare-data`
+2. run one baseline redesign train
+3. inspect TensorBoard
+4. inspect population patterns in the GUI
+5. submit redesign train scenario sweep
+6. submit redesign tune scenario sweep around the most promising families
+7. backfill older runs if analysis features changed
 
-## Scenario Sweeps
+## 8. Most Important Config Knobs
 
-The scenario configs live under:
+### Data
 
-- `src/age_decoupled_surrealgan/configs/scenarios/train/`
-- `src/age_decoupled_surrealgan/configs/scenarios/tune/`
+- `data.roi_normalization`
+- `data.roi_normalization_clip`
+- `data.ref_min_age`, `data.ref_max_age`
+- `data.tar_min_age`, `data.tar_max_age`
+- `data.holdout_study`
 
-The current scenario matrix is documented in:
+### Model
 
-- `docs/scenario_matrix.md`
+- `model.n_processes`
+- `model.encoder_hidden_dims`
+- `model.generator_hidden_dims`
+- `model.decomposer_hidden_dims`
+- `model.process_separation_margin`
 
-For cluster-scale array sweeps, use:
+### Training
 
-- `scripts/slurm/train_scenarios.txt`
-- `scripts/slurm/tune_scenarios.txt`
-- `scripts/slurm/train_array.sh`
-- `scripts/slurm/tune_array.sh`
-- `scripts/slurm/submit_train_scenarios.sh`
-- `scripts/slurm/submit_tune_scenarios.sh`
-- `scripts/slurm/submit_all_scenarios.sh`
+- `training.repetitions`
+- `training.epochs`
+- `training.batch_size`
+- `training.learning_rate`
+- `training.discriminator_learning_rate`
+- `training.monitor_metric`
+- `training.sampled_process_one_hot_only`
+
+### Losses
+
+- `losses.age_supervision`
+- `losses.age_adversary`
+- `losses.latent_reconstruction`
+- `losses.decomposition`
+- `losses.identity`
+- `losses.process_sensitivity`
+- `losses.generator_process_separation`
+- `losses.generator_process_redundancy`
+- `losses.process_latent_pairwise_correlation`
+
+### Tuning
+
+- `tuning.objective_metric`
+- `tuning.n_processes_options`
+- `tuning.width_options`
+- all `*_min` / `*_max` ranges for the loss families above

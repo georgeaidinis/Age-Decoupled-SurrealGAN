@@ -1,0 +1,46 @@
+experiment_name = "scenario-redesign-generator-push-5"
+
+[model]
+n_processes = 5
+encoder_hidden_dims = [640, 320]
+generator_hidden_dims = [640, 640, 320]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [640, 320]
+dropout = 0.06
+process_separation_margin = 0.25
+
+[training]
+repetitions = 5
+epochs = 100
+batch_size = 128
+learning_rate = 0.00018
+discriminator_learning_rate = 0.00008
+monitor_metric = "collapse_aware_quality_score"
+sensitivity_eval_subjects = 128
+sensitivity_process_anchor_age = 50.0
+
+[losses]
+adversarial = 1.2
+age_supervision = 4.0
+reference_age_supervision = 2.0
+age_adversary = 0.6
+latent_reconstruction = 2.0
+decomposition = 2.0
+identity = 0.45
+monotonicity = 1.0
+process_orthogonality = 0.30
+age_process_covariance = 0.20
+reference_process_sparsity = 0.03
+change_magnitude = 0.02
+low_activation_identity = 0.15
+process_age_correlation = 0.10
+process_latent_sparsity = 0.03
+age_sensitivity = 0.75
+process_sensitivity = 2.25
+age_sensitivity_target_pct = 0.25
+process_sensitivity_target_pct = 0.25
+age_shrinkage = 0.0
+process_shrinkage = 0.0
+generator_process_separation = 1.50
+generator_process_redundancy = 1.50
+process_latent_pairwise_correlation = 0.60

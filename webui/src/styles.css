@@ -327,6 +327,80 @@ input[type="range"] {
   height: 320px;
 }
 
+.latent-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.control-group.compact {
+  margin-top: 0;
+}
+
+.latent-age-legend {
+  display: grid;
+  grid-template-columns: max-content minmax(160px, 1fr) max-content;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 14px;
+  font-size: 0.82rem;
+  color: rgba(20, 36, 50, 0.78);
+}
+
+.latent-age-legend-bar {
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 36, 50, 0.12);
+  background: linear-gradient(90deg, hsl(220 70% 48%) 0%, hsl(130 58% 48%) 50%, hsl(35 74% 50%) 100%);
+}
+
+.latent-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin: 10px 0 14px;
+}
+
+.latent-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(20, 36, 50, 0.06);
+  font-size: 0.8rem;
+}
+
+.latent-legend-chip i {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.latent-chart-wrap {
+  min-height: 340px;
+}
+
+.latent-tooltip {
+  max-width: 320px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(20, 36, 50, 0.1);
+  box-shadow: 0 12px 24px rgba(20, 36, 50, 0.12);
+}
+
+.latent-tooltip strong,
+.latent-tooltip p {
+  margin: 0;
+}
+
+.latent-tooltip p + p {
+  margin-top: 4px;
+}
+
 .empty-chart-state {
   display: flex;
   align-items: center;
@@ -386,5 +460,9 @@ input[type="range"] {
 
   .overlay-legend-label.positive {
     text-align: left;
+  }
+
+  .latent-controls {
+    grid-template-columns: 1fr;
   }
 }

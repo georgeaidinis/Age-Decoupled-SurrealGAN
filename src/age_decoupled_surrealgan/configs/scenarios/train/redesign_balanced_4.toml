@@ -1,0 +1,46 @@
+experiment_name = "scenario-redesign-balanced-4"
+
+[model]
+n_processes = 4
+encoder_hidden_dims = [640, 320]
+generator_hidden_dims = [640, 640, 320]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [640, 320]
+dropout = 0.08
+process_separation_margin = 0.22
+
+[training]
+repetitions = 5
+epochs = 100
+batch_size = 128
+learning_rate = 0.00015
+discriminator_learning_rate = 0.00008
+monitor_metric = "collapse_aware_quality_score"
+sensitivity_eval_subjects = 128
+sensitivity_process_anchor_age = 50.0
+
+[losses]
+adversarial = 1.0
+age_supervision = 4.0
+reference_age_supervision = 2.0
+age_adversary = 0.75
+latent_reconstruction = 2.5
+decomposition = 2.5
+identity = 0.75
+monotonicity = 1.0
+process_orthogonality = 0.35
+age_process_covariance = 0.25
+reference_process_sparsity = 0.05
+change_magnitude = 0.05
+low_activation_identity = 0.35
+process_age_correlation = 0.15
+process_latent_sparsity = 0.05
+age_sensitivity = 0.5
+process_sensitivity = 1.5
+age_sensitivity_target_pct = 0.25
+process_sensitivity_target_pct = 0.20
+age_shrinkage = 0.0
+process_shrinkage = 0.0
+generator_process_separation = 1.35
+generator_process_redundancy = 1.25
+process_latent_pairwise_correlation = 0.75

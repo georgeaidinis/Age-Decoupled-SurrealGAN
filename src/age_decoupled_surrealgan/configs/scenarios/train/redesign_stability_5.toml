@@ -1,0 +1,46 @@
+experiment_name = "scenario-redesign-stability-5"
+
+[model]
+n_processes = 5
+encoder_hidden_dims = [640, 320]
+generator_hidden_dims = [640, 640, 320]
+discriminator_hidden_dims = [512, 256]
+decomposer_hidden_dims = [640, 320]
+dropout = 0.08
+process_separation_margin = 0.20
+
+[training]
+repetitions = 7
+epochs = 120
+batch_size = 128
+learning_rate = 0.00014
+discriminator_learning_rate = 0.00007
+monitor_metric = "collapse_aware_quality_score"
+sensitivity_eval_subjects = 128
+sensitivity_process_anchor_age = 50.0
+
+[losses]
+adversarial = 1.0
+age_supervision = 4.0
+reference_age_supervision = 2.0
+age_adversary = 0.90
+latent_reconstruction = 3.0
+decomposition = 3.0
+identity = 0.90
+monotonicity = 1.10
+process_orthogonality = 0.45
+age_process_covariance = 0.30
+reference_process_sparsity = 0.06
+change_magnitude = 0.06
+low_activation_identity = 0.35
+process_age_correlation = 0.18
+process_latent_sparsity = 0.06
+age_sensitivity = 0.45
+process_sensitivity = 1.25
+age_sensitivity_target_pct = 0.25
+process_sensitivity_target_pct = 0.18
+age_shrinkage = 0.0
+process_shrinkage = 0.0
+generator_process_separation = 1.25
+generator_process_redundancy = 1.35
+process_latent_pairwise_correlation = 0.80

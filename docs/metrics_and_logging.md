@@ -1,256 +1,273 @@
 # Metrics And Logging
 
-This document explains the metrics written by the age-decoupled pipeline and where they appear in TensorBoard, terminal logs, and text-readable artifacts.
+This document explains the metrics emitted by the **redesigned normalized additive sampled-latent model**.
 
-## Validation Metrics
+## Core Validation Metrics
 
-### Age latent to age correlation
+### Age capture
 
 $$
-\rho_a = \rho(a, \mathrm{age})
+\rho_{age} = \rho(\hat a, \mathrm{age})
 $$
 
 Interpretation:
-- Higher is better.
-- If this is near zero, the age branch is not actually capturing chronological age.
 
-### Process-age correlations
+- high is good,
+- this checks whether the explicit age latent is doing real work.
+
+### Process-age leakage
 
 For each process latent:
 
 $$
-\rho_i = \rho(r_i, \mathrm{age})
+\rho_k = \rho(\hat r_k, \mathrm{age})
 $$
 
-Interpretation:
-- Large absolute values mean that process latents still carry age information.
-
-### Residual process-age correlations
-
-For each process latent, regress out the age latent:
+Residual age leakage is measured after regressing \(\hat r_k\) on \(\hat a\):
 
 $$
-r_i^{res} = r_i - \hat r_i(a)
+\hat r_k^{res} = \hat r_k - \widehat{\mathbb{E}}[\hat r_k \mid \hat a]
 $$
 
-and compute:
-
 $$
-\rho_i^{res} = \rho(r_i^{res}, \mathrm{age})
+\rho_k^{res} = \rho(\hat r_k^{res}, \mathrm{age})
 $$
 
-Interpretation:
-- This is the most useful “age leakage” summary in the current extension.
-- Smaller absolute values are better.
+Aggregates:
+
+$$
+\overline{\rho}_{proc} = \mathrm{mean}_k |\rho_k|,
+\qquad
+\overline{\rho}_{proc}^{res} = \mathrm{mean}_k |\rho_k^{res}|.
+$$
+
+Smaller is better.
+
+### Subject-level process collapse
+
+Process collapse in latent space is tracked by pairwise correlations:
+
+$$
+C_{latent} = \mathrm{mean}_{i < j} |\rho(\hat r_i, \hat r_j)|.
+$$
+
+This is important because several earlier run families looked “good” only because every \(r_k\) encoded the same axis.
 
 ### Composite score
 
-The current checkpoint selection metric is:
-
 $$
-\mathrm{composite} =
-\rho(a, \mathrm{age})
-- \mathrm{mean}_i |\rho_i^{res}|
-- 0.5 \cdot \mathrm{mean}_i |\rho_i|
+\mathrm{composite}
+= \rho_{age} - \overline{\rho}_{proc}^{res} - 0.5\,\overline{\rho}_{proc}.
 $$
 
-Interpretation:
-- Higher is better.
-- It rewards age capture in the explicit age latent and penalizes age leakage into process latents.
+This measures age capture minus age leakage, but it does **not** reward generator expressivity by itself.
 
-### Latent sensitivity metrics
+## Generator-Responsiveness Metrics
 
-These metrics probe whether the direct generator path actually responds when age or process latents are changed.
+These are computed on saved `ref` samples and are what finally separated the redesigned model from the earlier nearly silent generator family.
 
-Age sensitivity:
+### Age sensitivity
 
-$$
-S_a = \frac{100}{nd}\sum_{j=1}^{n}\sum_{k=1}^{d}
-\frac{\left|G(x_j, a_{\max}, 0)_k - G(x_j, a_{\min}, 0)_k\right|}{|x_{jk}| + \epsilon}
-$$
-
-Process sensitivity for each latent:
+Let \(a_{min}\) and \(a_{max}\) be the configured minimum and maximum normalized ages. Then:
 
 $$
-S_{r_i} = \frac{100}{nd}\sum_{j=1}^{n}\sum_{k=1}^{d}
-\frac{\left|G(x_j, a_{anchor}, e_i)_k - G(x_j, a_{anchor}, 0)_k\right|}{|x_{jk}| + \epsilon}
+S_{age}
+= \frac{100}{nd}\sum_{j=1}^{n}\sum_{\ell=1}^{d}
+\frac{|G(x_j, a_{max}, 0)_\ell - G(x_j, a_{min}, 0)_\ell|}{|x^{raw}_{j\ell}| + \epsilon}.
 $$
 
-Process separation:
+### Process sensitivity
+
+For process \(k\), with anchor age \(a_0\):
 
 $$
-S_{sep} = \mathrm{mean}_{i<j}\;
-\frac{100}{nd}\sum_{m=1}^{n}\sum_{k=1}^{d}
-\frac{\left|G(x_m, a_{anchor}, e_i)_k - G(x_m, a_{anchor}, e_j)_k\right|}{|x_{mk}| + \epsilon}
+S_{proc,k}
+= \frac{100}{nd}\sum_{j=1}^{n}\sum_{\ell=1}^{d}
+\frac{|G(x_j, a_0, e_k)_\ell - G(x_j, a_0, 0)_\ell|}{|x^{raw}_{j\ell}| + \epsilon}.
 $$
 
-Interpretation:
-- Higher means the generator is more responsive to latent controls.
-- Near-zero values indicate a collapsed or weakly conditioned generator branch even if the encoder/decomposer metrics look good.
+and
+
+$$
+\overline{S}_{proc} = \mathrm{mean}_k S_{proc,k}.
+$$
+
+### Process-pattern separation
+
+Define the raw process response:
+
+$$
+g_k(x) = G(x, a_0, e_k) - G(x, a_0, 0).
+$$
+
+Then the mean absolute pairwise separation is:
+
+$$
+S_{sep} = \mathrm{mean}_{i < j} \frac{100}{nd} \sum_{j,\ell}
+\frac{|g_i(x_j)_\ell - g_j(x_j)_\ell|}{|x^{raw}_{j\ell}| + \epsilon}.
+$$
+
+### Process-pattern correlation
+
+The generator can still collapse even when amplitudes are large, so we also measure:
+
+$$
+C_{pattern} = \mathrm{mean}_{i<j} |\rho(\bar g_i, \bar g_j)|
+$$
+
+where \(\bar g_k\) is the mean process response vector across sampled `ref` subjects.
+
+Smaller is better.
+
+### Directional growth summaries
+
+To detect implausible global growth, we track the positive-change mass under age and process pushes:
+
+$$
+P_{age}^{+} = \mathrm{mean}\,\max(g_{age}^{raw}, 0),
+\qquad
+P_{proc}^{+} = \mathrm{mean}_k \mathrm{mean}\,\max(g_k^{raw}, 0).
+$$
+
+These are diagnostics; they matter most when running directional/shrinkage scenarios.
+
+## Selection Metrics
 
 ### Quality score
 
-The validation score used by the extended train/tune presets is:
-
 $$
-\mathrm{quality} =
-\mathrm{composite}
-+ 0.25 \cdot
-\left[
-\log(1 + S_a) +
-\log(1 + \overline{S_r}) +
-0.5 \log(1 + S_{sep})
-\right]
+\mathrm{quality}
+= \mathrm{composite}
+ + 0.25 \cdot \mathrm{latent\_sensitivity\_score}
+ - 0.5 \cdot C_{latent}.
 $$
-
-where
-
-$$
-\overline{S_r} = \mathrm{mean}_i\; S_{r_i}
-$$
-
-Interpretation:
-- Higher is better.
-- It keeps the age-decoupling goal of `composite_score` but adds pressure toward a generator that actually responds to latent manipulation.
 
 ### Directional quality score
 
-The directional variant adds a penalty for positive generator responses when age or process latents are pushed upward:
-
 $$
 \mathrm{directional\_quality}
-=
-\mathrm{composite}
-+
-0.25 \cdot \mathrm{directional\_latent\_sensitivity}
+= \mathrm{composite}
+ + 0.25 \cdot \mathrm{directional\_latent\_sensitivity\_score}
+ - 0.5 \cdot C_{latent}.
 $$
 
-where the directional latent sensitivity subtracts terms based on the mean positive change induced by age and process manipulations.
+### Collapse-aware quality score
+
+This is the main redesigned selection metric:
+
+$$
+\mathrm{collapse\_aware\_quality}
+= \mathrm{composite}
+ + 0.25 \cdot \mathrm{collapse\_aware\_latent\_sensitivity\_score}
+ - 0.75 \cdot C_{latent}.
+$$
 
 Interpretation:
-- Higher is better.
-- This is useful when you want to bias model selection toward shrinkage-dominant patterns.
-- It is an explicit prior, not a neutral biological truth.
 
-## Agreement Metrics
+- reward age capture,
+- reward non-silent generator behavior,
+- penalize subject-level process collapse,
+- penalize generator-pattern redundancy.
 
-Agreement is still computed across repetitions using permutation alignment of process dimensions:
+This is why the redesigned run is more meaningful than the earlier families, even when some older runs looked superficially “clean” on age-only metrics.
 
-- dimension-correlation
-- difference-correlation
+## Repetition Agreement
 
-These are conceptually inherited from the original SurrealGAN code.
+Across repetitions, latent alignment is measured by permutation matching of \(r_1,\dots,r_K\).
 
-## TensorBoard Layout
+Two agreement summaries are saved:
 
-The trainer now groups TensorBoard scalars under readable namespaces:
+$$
+A_{dim} = \text{mean matched dimension correlation}
+$$
 
-- `loss/discriminator/*`
-- `loss/generator/*`
-- `loss/supervision/*`
-- `loss/reconstruction/*`
-- `loss/disentanglement/*`
-- `loss/regularization/*`
-- `loss/ablation/*`
-- `state/latents/*`
-- `state/change/*`
-- `metric/validation/*`
-- `selection/validation/*`
-- `docs/*`
+$$
+A_{diff} = \text{mean matched pair-difference correlation}
+$$
 
-The `docs/*` text tabs embed the objective and metric explanation documents directly into TensorBoard.
+These matter because the process axes are only meaningful if they are reproducible across repeated fits.
 
-For repeated runs, TensorBoard now writes one event stream per repetition:
+## Population-Level Analysis Artifacts
+
+For the selected checkpoint, the pipeline precomputes isolated factor patterns:
+
+### Age pattern
+
+$$
+\Delta^{age}_{pop}
+= \mathbb{E}_{x \sim \text{ref}}
+\left[G(x, a_{max}, 0) - G(x, a_{min}, 0)\right].
+$$
+
+### Process pattern
+
+$$
+\Delta^{(k)}_{pop}
+= \mathbb{E}_{x \sim \text{ref}}
+\left[G(x, a_0, e_k) - G(x, a_0, 0)\right].
+$$
+
+Saved artifacts per run:
+
+- CSV ROI tables
+- JSON summaries
+- prebuilt NIfTI overlays
+- top-10 ROI tables
+- sign summaries
+- repetition stability summaries
+- split-wise correlation heatmaps
+
+These are what power the GUI population mode.
+
+## Logging Outputs
+
+### Terminal and log files
+
+Training now prints:
+
+- run start summary,
+- device and config path,
+- model dimensions,
+- checkpoint schedule,
+- per-epoch train/validation metrics,
+- train time, validation time, total epoch time, and repetition elapsed time.
+
+Example:
+
+```text
+[rep 1/5] [epoch 12/100] [t_train=00:01:44 t_val=00:00:18 t_epoch=00:02:02 t_rep=00:25:31] train: G=1.4821 D=0.6324 ...
+```
+
+Text-readable outputs include:
+
+- `logs/train.log`
+- `logs/epoch_history.jsonl`
+- `metrics/epoch_history.csv`
+- `metrics/split_metrics.csv`
+- `metrics/repetition_summary.csv`
+- `metrics/run_summary.md`
+
+### TensorBoard
+
+Each repetition is its own TensorBoard run:
 
 - `tensorboard/repetition_00`
 - `tensorboard/repetition_01`
-- `tensorboard/repetition_02`
+- ...
 
-Each repetition contains the full metric set under the same tag names. In practice this gives:
+This keeps one consistent color per repetition across plots.
 
-- one TensorBoard run per repetition
-- one plot per metric tag
-- consistent colors for a repetition across all plots
-- much less left-panel clutter than one subrun per metric
+Important tag groups:
 
-This is the intended default because the repetition is the natural comparison unit inside a training run.
+- `loss/*`
+- `state/*`
+- `metric/validation/*`
+- `selection/validation/*`
 
-## Terminal Logging
+The most important plots to inspect for the redesigned model are:
 
-Every run now begins with a concise startup summary:
-
-```text
-Experiment: ...
-Config: ...
-Device: ...
-Run setup: repetitions=..., epochs=..., batch_size=..., lr=..., d_lr=...
-Runtime: num_workers=..., persistent_workers=..., use_amp=..., compile_model=...
-Architecture: n_features=..., n_processes=..., encoder=[...], generator=[...], ...
-Checkpoint epochs: [...] plus best-per-repetition checkpoint
-```
-
-Every epoch then prints a condensed summary line:
-
-```text
-[rep 1/3] [epoch 5/50] train: G=... D=... adv=... age=... decomp=... val: comp=... age_corr=... resid_age=...
-```
-
-This is also written to:
-
-- `runs/<run>/logs/train.log`
-
-## Checkpoint Cadence
-
-By default, the trainer no longer saves a checkpoint at every epoch.
-
-If `save_every > 0`, checkpoints are written every `save_every` epochs.
-
-If `save_every = 0`, the trainer computes an interval automatically so that the total number of regular checkpoints is approximately:
-
-$$
-\text{target\_regular\_checkpoints}
-$$
-
-with the final epoch always included. A separate best checkpoint is still saved for each repetition.
-
-## Resume Support
-
-Training can be resumed from an interrupted run directory:
-
-```bash
-PYTHONPATH=src python -m age_decoupled_surrealgan.cli \
-  --config path/to/config.toml \
-  train --resume-run-dir runs/<existing_run_dir>
-```
-
-The trainer will:
-- skip finished repetitions
-- restore the latest regular checkpoint for the active repetition
-- restore optimizer and scaler state when present
-- continue appending metrics and logs into the same run directory
-
-Optuna tuning resumes automatically when the tuning config uses a persistent SQLite storage and `resume_if_exists = true`.
-
-## Text-Readable Artifacts
-
-Each run now writes:
-
-- `runs/<run>/run_summary.json`
-- `runs/<run>/metrics/epoch_history.csv`
-- `runs/<run>/logs/epoch_history.jsonl`
-- `runs/<run>/metrics/repetition_summary.csv`
-- `runs/<run>/metrics/split_metrics.csv`
-- per-split metric JSONs in `runs/<run>/metrics/*.json`
-
-These are intended to be readable in a text editor without opening TensorBoard.
-
-## Losses Logged But Disabled By Default
-
-The following losses are always computed and logged, but default to zero weight:
-
-- `change_mag`
-- `low_identity`
-- `process_age_corr`
-- `process_sparse`
-
-This is deliberate so that ablation runs can be turned on by config without needing code changes.
+1. `metric/validation/age_latent_age_correlation`
+2. `metric/validation/mean_process_sensitivity_pct_mean`
+3. `metric/validation/process_pattern_correlation_abs_mean`
+4. `metric/validation/process_latent_pairwise_correlation_abs_mean`
+5. `selection/validation/collapse_aware_quality_score`

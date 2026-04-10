@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { BrainViewer } from "./components/BrainViewer";
+import { LatentSpaceExplorer } from "./components/LatentSpaceExplorer";
 import { SliderPanel } from "./components/SliderPanel";
 import {
   atlasManifest,
+  getLatentSpace,
   getAtlasRoiMetadata,
   getPopulationPattern,
   getPopulationPatterns,
@@ -14,6 +16,7 @@ import {
   inferSubject,
   listRuns,
   type InferenceResponse,
+  type LatentSpaceResponse,
   type PopulationPatternManifest,
   type PopulationPatternResponse,
   type RoiMetadataRow,
@@ -46,6 +49,7 @@ export function App() {
   const [populationManifest, setPopulationManifest] = useState<PopulationPatternManifest | null>(null);
   const [selectedPopulationPattern, setSelectedPopulationPattern] = useState("age");
   const [populationPattern, setPopulationPattern] = useState<PopulationPatternResponse | null>(null);
+  const [latentSpace, setLatentSpace] = useState<LatentSpaceResponse | null>(null);
   const [loadingDefaults, setLoadingDefaults] = useState(false);
   const [loadingInference, setLoadingInference] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -162,6 +166,7 @@ export function App() {
       return;
     }
     let cancelled = false;
+    setLatentSpace(null);
     setSubjects([]);
     setSelectedRow(null);
     setSubjectMetadata(null);
@@ -182,6 +187,30 @@ export function App() {
         }
         console.error(loadError);
         setError(loadError instanceof Error ? loadError.message : "Failed to load split subjects.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRun, splitName]);
+
+  useEffect(() => {
+    if (!selectedRun) {
+      return;
+    }
+    let cancelled = false;
+    getLatentSpace(selectedRun, splitName)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setLatentSpace(payload);
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(loadError);
+        setError(loadError instanceof Error ? loadError.message : "Failed to load latent-space predictions.");
       });
     return () => {
       cancelled = true;
@@ -588,10 +617,10 @@ export function App() {
             <p>
               {displayMode === "population"
                 ? chartMode === "percent"
-                  ? "Bars show the average isolated population-level percent change for the selected factor."
+                  ? "Bars show the average isolated population-level percent change for the selected factor. Percent is computed as 100 × Δ / |baseline ROI volume|."
                   : "Average percent changes are extremely small for this pattern, so the plot is showing raw ROI deltas instead."
                 : chartMode === "percent"
-                  ? "Bars show percent change relative to the selected subject's current ROI volume."
+                  ? "Bars show percent change relative to the selected subject's current ROI volume. Small baseline ROIs can therefore yield large percentages."
                   : "Percent changes are extremely small for this checkpoint, so the plot is showing raw ROI deltas instead."}
             </p>
           </div>
@@ -603,7 +632,7 @@ export function App() {
                   <XAxis dataKey="name" hide />
                   <YAxis
                     tickFormatter={(value) =>
-                      chartMode === "percent" ? `${Number(value).toFixed(3)}%` : Number(value).toFixed(3)
+                      chartMode === "percent" ? `${Number(value).toFixed(1)}%` : Number(value).toFixed(1)
                     }
                   />
                   <Tooltip
@@ -611,9 +640,9 @@ export function App() {
                       if (key === "percent_change" || key === "delta") {
                         return [
                           chartMode === "percent"
-                            ? `${Number(item.payload.percent_change).toFixed(4)}%`
-                            : `${Number(item.payload.delta).toFixed(4)}`,
-                          `Δ=${item.payload.delta.toFixed(4)} | %=${item.payload.percent_change.toFixed(4)} | baseline=${item.payload.baseline_value.toFixed(2)} | predicted=${item.payload.predicted_value.toFixed(2)}`,
+                            ? `${Number(item.payload.percent_change).toFixed(1)}%`
+                            : `${Number(item.payload.delta).toFixed(1)}`,
+                          `Δ=${item.payload.delta.toFixed(1)} | %=${item.payload.percent_change.toFixed(1)} | baseline=${item.payload.baseline_value.toFixed(1)} | predicted=${item.payload.predicted_value.toFixed(1)}`,
                         ];
                       }
                       return [String(value), key];
@@ -631,6 +660,16 @@ export function App() {
             )}
           </div>
         </section>
+
+        {latentSpace && runMetadata ? (
+          <LatentSpaceExplorer
+            rows={latentSpace.rows}
+            nProcesses={runMetadata.n_processes}
+            splitName={latentSpace.split_name}
+            totalRows={latentSpace.total_rows}
+            returnedRows={latentSpace.returned_rows}
+          />
+        ) : null}
 
         {displayMode === "subject" && inference?.debug ? (
           <section className="panel">

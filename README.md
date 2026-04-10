@@ -15,12 +15,15 @@ The original `SurrealGAN/` package is still present as historical reference. The
 
 ## Scientific framing
 
-The new model keeps the broad SurrealGAN idea of learning transformations in ROI space, but changes the latent structure:
+The new model keeps the broad SurrealGAN idea of learning transformations in ROI space, but the current redesign now uses:
 
+- REF-fitted ROI z-scoring
+- a sampled-latent training loop
+- a factorized additive generator
 - one explicit **age latent**
 - `K` non-age **process latents** (`r1..rK`)
 
-_The intent is to let the age latent capture age-related structure while the process latents uncover additional patterns that may correspond to disease or other mechanisms._
+_The intent is to let the age latent capture age-related structure while the process latents uncover additional patterns that may correspond to disease or other mechanisms, without letting the generator collapse into silence or redundant process axes._
 
 ## Environment
 
@@ -101,7 +104,8 @@ It documents:
 
 Detailed documentation lives in [`docs/`](docs):
 
-- [`docs/objectives_and_losses.md`](docs/objectives_and_losses.md): original vs extension objectives, mathematical formulations, and ablation options
+- [`docs/model_architecture.md`](docs/model_architecture.md): redesigned model structure, additive generator, decomposer, and latent inference path
+- [`docs/objectives_and_losses.md`](docs/objectives_and_losses.md): redesigned objectives, mathematical formulations, and rationale for each loss family
 - [`docs/metrics_and_logging.md`](docs/metrics_and_logging.md): metric definitions, TensorBoard organization, terminal logs, and text-readable outputs
 - [`docs/pipeline_usage.md`](docs/pipeline_usage.md): command-line usage and experiment workflow
 - [`docs/slurm_workflows.md`](docs/slurm_workflows.md): cluster submission guidance and script usage
@@ -199,6 +203,7 @@ The frontend lives in [`webui/`](webui). It is a Vite/React application with:
 
 - dynamic slider count inferred from checkpoint metadata
 - subject selection from processed splits
+- saved latent-space exploration from prediction CSVs
 - 2D multiplanar slice view by default
 - optional 3D volume mode
 - ROI change bar chart

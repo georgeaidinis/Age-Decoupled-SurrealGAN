@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=age_surrealgan_train
-#SBATCH --partition=short
+#SBATCH --partition=aishort
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:v100:1
+#SBATCH --gres=gpu:a40:1
 #SBATCH --mem=32G
 #SBATCH --time=00:30:00
 #SBATCH --output=slurm_logs/%x-%j.out
