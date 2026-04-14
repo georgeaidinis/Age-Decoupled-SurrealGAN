@@ -145,11 +145,11 @@ run_summary.json -> selected_checkpoint
 Recommended loop:
 
 1. `prepare-data`
-2. run one baseline redesign train
+2. run one baseline train
 3. inspect TensorBoard
 4. inspect population patterns in the GUI
-5. submit redesign train scenario sweep
-6. submit redesign tune scenario sweep around the most promising families
+5. submit train scenario sweep
+6. submit tune scenario sweep around the most promising families
 7. backfill older runs if analysis features changed
 
 ## 8. Most Important Config Knobs

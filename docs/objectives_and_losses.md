@@ -1,217 +1,275 @@
 # Objectives And Losses
 
-This document describes the **current redesigned model**, not the earlier concatenation-generator extension. The redesign keeps the SurrealGAN idea of learning ROI-space transformations, but changes three core ingredients:
+This document describes the **current redesigned model** and explains exactly what each loss is doing, where it is applied, and why it exists.
 
-1. ROI features are normalized against the training `ref` cohort.
-2. The generator is **factorized additive**, so age and each process own explicit basis patterns.
-3. Training is again **sampled-latent**, closer in spirit to the original SurrealGAN, instead of relying only on direct encoder-style inference.
+## 1. The Big Picture
 
-## Notation
+The redesigned model differs from the earlier extension in five important ways:
+
+1. ROI inputs are normalized relative to the training `ref` cohort.
+2. The generator is **factorized additive** rather than latent-concatenative.
+3. Training is **sampled-latent**, closer to the original SurrealGAN idea.
+4. The decomposer is supervised against known synthetic components.
+5. There are explicit losses against **generator silence** and **process collapse**.
+
+So the current method is trying to solve two problems at once:
+
+- disentangle age from non-age processes,
+- ensure those non-age processes still correspond to distinct generator-side anatomical effects.
+
+## 2. Notation
 
 - \(x \in \mathbb{R}^d\): normalized ROI vector from a `ref` subject.
 - \(y \in \mathbb{R}^d\): normalized ROI vector from a `tar` subject.
-- \(a \in [0,1]\): normalized age latent.
-- \(r = (r_1,\dots,r_K) \in [0,1]^K\): process latents.
-- \(H_{\text{age}}(x) \in \mathbb{R}^d\): age basis pattern.
-- \(H_k(x) \in \mathbb{R}^d\): process-\(k\) basis pattern.
-- \(Q(\cdot)\): decomposer.
-- \(R_{\text{age}}(\cdot)\), \(R_k(\cdot)\): latent reconstruction heads.
-- \(D(\cdot)\): discriminator.
+- \(a \in [0,1]\): sampled or inferred age latent.
+- \(r = (r_1,\dots,r_K) \in [0,1]^K\): sampled or inferred process latent vector.
+- \(H_{age}(x)\): age basis pattern predicted by the generator.
+- \(H_k(x)\): process-\(k\) basis pattern predicted by the generator.
+- \(\Delta_{age}(x,a) = a\,H_{age}(x)\)
+- \(\Delta_k(x,r_k) = r_k\,H_k(x)\)
+- \(\hat y = x + \Delta_{age}(x,a) + \sum_k \Delta_k(x,r_k)\)
 
-## ROI Normalization
+## 3. Normalization
 
-Training no longer uses raw ROI magnitudes directly. For each ROI \(j\), normalization statistics are fit on the training `ref` cohort:
+The model does not train on raw ROI magnitudes.
+
+For each ROI \(j\), fit REF statistics on the **training ref split only**:
 
 $$
-\mu_j^{ref} = \mathbb{E}[x_j \mid \text{train ref}], \qquad
+\mu_j^{ref} = \mathbb{E}[x_j \mid \text{train ref}],
+\qquad
 \sigma_j^{ref} = \mathrm{Std}[x_j \mid \text{train ref}].
 $$
 
-The normalized ROI value is:
+Then normalize:
 
 $$
-x'_j = \mathrm{clip}\left(\frac{x_j - \mu_j^{ref}}{\sigma_j^{ref} + \varepsilon}, -c, c\right).
+x_j' = \mathrm{clip}\left(\frac{x_j - \mu_j^{ref}}{\sigma_j^{ref} + \varepsilon}, -c, c\right).
 $$
 
-In the default redesign:
+This matters because the older raw-ROI training space made large ROIs dominate the objective and made generator sensitivity hard to calibrate.
 
-- `roi_normalization = "zscore"`
-- \(\varepsilon = 10^{-6}\)
-- \(c = 6\)
+## 4. Generator
 
-This is the single most important numerical change relative to the earlier failed runs on raw ROI scale.
-
-## Model
-
-### Generator
-
-The generator is factorized additive:
+The generator first forms a context representation:
 
 $$
-\Delta_{\text{age}}(x,a) = a \, H_{\text{age}}(x)
+h(x) = T(x)
+$$
+
+then predicts:
+
+$$
+H_{age}(x) = W_{age} h(x)
 $$
 
 $$
-\Delta_{\text{proc}}(x,r) = \sum_{k=1}^{K} r_k \, H_k(x)
+\left(H_1(x),\dots,H_K(x)\right) = W_{proc} h(x).
 $$
 
-$$
-\hat y = x + \Delta(x,a,r)
-      = x + \Delta_{\text{age}}(x,a) + \Delta_{\text{proc}}(x,r).
-$$
-
-This is more interpretable than the earlier concatenation MLP because each latent dimension now owns an explicit basis field.
-
-### Decomposer and Reconstruction
-
-The decomposer predicts one age component and \(K\) process components from a synthetic or real target:
+The synthetic target is:
 
 $$
-Q(z) = \left(\tilde\Delta_{\text{age}}(z), \tilde\Delta_1(z), \dots, \tilde\Delta_K(z)\right).
+\hat y = x + a\,H_{age}(x) + \sum_{k=1}^{K} r_k H_k(x).
 $$
 
-The latent reconstruction heads invert those components:
+This makes each latent dimension own an explicit basis pattern, which is much easier to regularize than a generic concatenation MLP.
 
-$$
-\hat a = R_{\text{age}}(\tilde\Delta_{\text{age}}), \qquad
-\hat r_k = R_k(\tilde\Delta_k).
-$$
+## 5. Training Inputs and Sampling
 
-On real `tar` subjects, the latent inference path is:
+Each training step uses:
 
-$$
-(\hat a(y), \hat r(y)) = \left(R_{\text{age}}(Q_{\text{age}}(y)), R_1(Q_1(y)), \dots, R_K(Q_K(y))\right).
-$$
+- a `ref` batch \(x\),
+- a `tar` batch \(y\),
+- a sampled age latent equal to the normalized chronological age of the target batch,
+- sampled process latents.
 
-## Training Strategy
-
-For each mini-batch:
-
-1. draw a `ref` sample \(x\),
-2. draw a real `tar` sample \(y\),
-3. set the sampled age latent to the target subject’s normalized age,
-4. sample a process vector \(r\).
-
-By default the redesigned model uses **one-hot process sampling**:
+By default the redesign uses **one-hot process sampling**:
 
 $$
 r = (0,\dots,0,u,0,\dots,0), \qquad u \sim \mathrm{Uniform}(0,1),
 $$
 
-and a “later” version for monotonicity:
+and also constructs a later version:
 
 $$
 r^{later}_k \ge r_k.
 $$
 
-This sampled-latent supervision is much closer to the original SurrealGAN philosophy than the older extension was.
+This is close in spirit to the original SurrealGAN logic: sample process severities, generate a synthetic target, then ask whether the model can recover what it just used.
 
-## Losses
+## 6. Decomposer and Latent Reconstruction
 
-The generator-side objective is:
+The decomposer predicts:
+
+$$
+Q(z) =
+\left(\tilde\Delta_{age}(z), \tilde\Delta_1(z), \dots, \tilde\Delta_K(z)\right).
+$$
+
+The latent reconstruction heads then estimate:
+
+$$
+\hat a = R_{age}(\tilde\Delta_{age}),
+\qquad
+\hat r_k = R_k(\tilde\Delta_k).
+$$
+
+This is used in two ways:
+
+1. synthetic-target supervision:
+   the model knows the sampled \(a\) and \(r\), so it can check whether those are recovered;
+2. real-target inference:
+   for actual subjects, the inferred \(\hat a\) and \(\hat r\) become the age latent and `r`-indices.
+
+## 7. Loss Table
+
+### A. Adversarial realism
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Discriminator | \(L_D = \frac{1}{2}\big(\mathrm{BCE}(D(y),1) + \mathrm{BCE}(D(\hat y),0)\big)\) | Push synthetic targets toward the target manifold. |
+| Generator adversarial | \(L_{adv} = \mathrm{BCE}(D(\hat y),1)\) | Make generated targets look target-like. |
+
+### B. Age supervision
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Age supervision | \(L_{age} = \lVert \hat a(y) - a(y)\rVert_2^2\) | Real targets should encode their actual age. |
+| Reference age supervision | \(L_{ref-age} = \lVert \hat a(x) - a(x)\rVert_2^2\) | The age branch should work on the reference cohort too. |
+| Age adversary | \(L_{age-adv} = \lVert A(\hat r(y)) - a(y)\rVert_2^2\) with GRL | Process latents should not be an alternate age axis. |
+
+### C. Synthetic invertibility
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Latent reconstruction | \(L_{latent} = \lVert \hat a(\hat y)-a\rVert_2^2 + \sum_k \lVert \hat r_k(\hat y)-r_k\rVert_2^2\) | If the generator used a latent, the decomposer should recover it. |
+| Decomposition | \(L_{decomp} = \lVert \tilde\Delta_{age}(\hat y)-\Delta_{age}\rVert_2^2 + \sum_k \lVert \tilde\Delta_k(\hat y)-\Delta_k\rVert_2^2\) | The decomposer should recover the actual synthetic components. |
+
+This is one of the biggest conceptual corrections relative to the older extension: decomposition is now supervised against known synthetic components, not only against their sum.
+
+### D. Identity / magnitude regularization
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Identity | \(L_{id} = \lVert G(x,0,0)-x\rVert_1\) | No activation should imply no change. |
+| Low-activation identity | \(L_{low-id} = \lVert G(x,a_{small},r_{small})-x\rVert_1\) | Tiny activations should stay close to the baseline. |
+| Change magnitude | \(L_{change} = \lVert \Delta(x,a,r)\rVert_1\) | Prevent gratuitously large deformations. |
+
+### E. Monotonicity and disentanglement
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Monotonicity | \(L_{mono} = \max\big(|\Delta(r)| - |\Delta(r^{later})|, 0\big)\) | A stronger process activation should not give a weaker effect. |
+| Orthogonality | \(L_{orth} = \lVert \bar H \bar H^\top - I\rVert_2^2\) | Mean process bases should not all point in the same direction. |
+| Age-process covariance | \(L_{cov} = \lVert \mathrm{Cov}(\hat a(y), \hat r(y))\rVert_F^2\) | Keep age and process branches statistically separate. |
+| Process-age correlation | \(L_{proc-age} = \mathrm{mean}_k \rho(\hat r_k(y), a(y))^2\) | Directly penalize age leakage in process latents. |
+| Reference process sparsity | \(L_{ref-sparse} = \lVert \hat r(x)\rVert_1\) | Reference subjects should have low process burden. |
+| Process latent sparsity | \(L_{proc-sparse} = \lVert \hat r(y)\rVert_1\) | Encourage compact process codes. |
+| Pairwise latent correlation | \(L_{pair} = \mathrm{mean}_{i\neq j}\rho(\hat r_i(y), \hat r_j(y))^2\) | Stop all process latents from becoming the same scalar. |
+
+### F. Generator-collapse controls
+
+These were the key missing ingredients before the redesign.
+
+Let
+
+$$
+g_k(x) = G(x, a_0, e_k) - G(x, a_0, 0)
+$$
+
+and
+
+$$
+g_{age}(x) = G(x, a_{max}, 0) - G(x, a_{min}, 0).
+$$
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Age sensitivity | \(L_{age-sens} = \max(\tau_{age} - S_{age}, 0)\) | Prevent an age-silent generator. |
+| Process sensitivity | \(L_{proc-sens} = \max(\tau_{proc} - \overline{S}_{proc}, 0)\) | Prevent a process-silent generator. |
+| Generator separation | \(L_{gen-sep} = \max(m - \mathrm{dist}(H_i,H_j), 0)\) | Force different process bases apart. |
+| Generator redundancy | \(L_{gen-red} = \mathrm{mean}_{i<j} |\rho(H_i,H_j)|\) | Penalize near-duplicate process bases directly. |
+
+This is the main reason the redesign behaves better qualitatively than the older model family.
+
+### G. Optional directional priors
+
+| Loss | Formula | Why it exists |
+| --- | --- | --- |
+| Age shrinkage | \(L_{age-shrink} = \mathrm{mean}\,\max(g_{age}^{raw},0)\) | Penalize positive age-driven raw-volume changes. |
+| Process shrinkage | \(L_{proc-shrink} = \mathrm{mean}_k \max(g_k^{raw},0)\) | Penalize positive process-driven raw-volume changes. |
+
+These are **optional priors**, not biological truths. Ventricles and CSF-like structures can enlarge.
+
+## 8. Full Generator Objective
+
+The full generator-side objective is:
 
 $$
 \begin{aligned}
 L_G =\;&
-\lambda_{adv} L_{adv}
- + \lambda_{age} L_{age}
- + \lambda_{ref\_age} L_{ref\_age}
- + \lambda_{age\_adv} L_{age\_adv} \\
-&+ \lambda_{latent} L_{latent}
- + \lambda_{decomp} L_{decomp}
- + \lambda_{id} L_{id}
- + \lambda_{mono} L_{mono} \\
-&+ \lambda_{orth} L_{orth}
- + \lambda_{cov} L_{cov}
- + \lambda_{ref\_sparse} L_{ref\_sparse}
- + \lambda_{change} L_{change} \\
-&+ \lambda_{low\_id} L_{low\_id}
- + \lambda_{proc\_age} L_{proc\_age}
- + \lambda_{proc\_sparse} L_{proc\_sparse}
- + \lambda_{age\_sens} L_{age\_sens} \\
-&+ \lambda_{proc\_sens} L_{proc\_sens}
- + \lambda_{age\_shrink} L_{age\_shrink}
- + \lambda_{proc\_shrink} L_{proc\_shrink} \\
-&+ \lambda_{gen\_sep} L_{gen\_sep}
- + \lambda_{gen\_red} L_{gen\_red}
- + \lambda_{pair} L_{pair}.
+\lambda_{adv}L_{adv}
+ + \lambda_{age}L_{age}
+ + \lambda_{ref-age}L_{ref-age}
+ + \lambda_{age-adv}L_{age-adv} \\
+&+ \lambda_{latent}L_{latent}
+ + \lambda_{decomp}L_{decomp}
+ + \lambda_{id}L_{id}
+ + \lambda_{mono}L_{mono} \\
+&+ \lambda_{orth}L_{orth}
+ + \lambda_{cov}L_{cov}
+ + \lambda_{ref-sparse}L_{ref-sparse}
+ + \lambda_{change}L_{change} \\
+&+ \lambda_{low-id}L_{low-id}
+ + \lambda_{proc-age}L_{proc-age}
+ + \lambda_{proc-sparse}L_{proc-sparse}
+ + \lambda_{age-sens}L_{age-sens} \\
+&+ \lambda_{proc-sens}L_{proc-sens}
+ + \lambda_{age-shrink}L_{age-shrink}
+ + \lambda_{proc-shrink}L_{proc-shrink} \\
+&+ \lambda_{gen-sep}L_{gen-sep}
+ + \lambda_{gen-red}L_{gen-red}
+ + \lambda_{pair}L_{pair}.
 \end{aligned}
 $$
 
-The discriminator objective is:
+Not every scenario uses all losses strongly. The scenario matrix varies the **weights**, not the presence of the code paths.
 
-$$
-L_D = \frac{1}{2}\left(
-\mathrm{BCE}(D(y), 1) + \mathrm{BCE}(D(\hat y), 0)
-\right).
-$$
+## 9. What the Losses Are Trying to Achieve Together
 
-### Core losses
+The redesigned model is optimizing for all of the following at once:
 
-| Loss | Formula | Intuition |
-| --- | --- | --- |
-| Adversarial | \(L_{adv} = \mathrm{BCE}(D(\hat y), 1)\) | Generated targets should look like real `tar` subjects. |
-| Age supervision | \(L_{age} = \lVert \hat a(y) - a(y) \rVert_2^2\) | Real targets should encode their own age. |
-| Reference age supervision | \(L_{ref\_age} = \lVert \hat a(x) - a(x) \rVert_2^2\) | Age branch should also behave correctly on `ref`. |
-| Age adversary | \(L_{age\_adv} = \lVert A(\hat r(y)) - a(y) \rVert_2^2\) with GRL | Remove age information from process latents. |
-| Latent reconstruction | \(L_{latent} = \lVert \hat a(\hat y) - a \rVert_2^2 + \sum_k \lVert \hat r_k(\hat y) - r_k \rVert_2^2\) | If the generator used a latent, the decomposer should recover it. |
-| Decomposition | \(L_{decomp} = \lVert \tilde\Delta_{\text{age}}(\hat y) - \Delta_{\text{age}} \rVert_2^2 + \sum_k \lVert \tilde\Delta_k(\hat y) - \Delta_k \rVert_2^2\) | Explicit supervision of the synthetic components. |
-| Identity | \(L_{id} = \lVert G(x,0,0) - x \rVert_1\) | No latent activation should mean no change. |
-| Low-activation identity | \(L_{low\_id} = \lVert G(x,a_{small},r_{small}) - x \rVert_1\) | Tiny latent activations should stay near the reference manifold. |
-| Change magnitude | \(L_{change} = \lVert \Delta(x,a,r) \rVert_1\) | Prevent gratuitously large deformations. |
+1. \(a\) should encode chronological age.
+2. \(r_k\) should not simply be age proxies.
+3. synthetic targets should remain target-like.
+4. sampled latent factors should be recoverable from the synthetic target.
+5. each process should have a real, nontrivial anatomical effect.
+6. different processes should have different anatomical effects.
+7. process latents should not collapse onto each other.
 
-### Monotonicity and disentanglement
+That is the actual scientific intent of the redesign.
 
-| Loss | Formula | Intuition |
-| --- | --- | --- |
-| Monotonicity | \(L_{mono} = \max\big(\lvert \Delta(r) \rvert - \lvert \Delta(r^{later}) \rvert, 0\big)\) | Larger process activation should not produce a weaker effect. |
-| Orthogonality | \(L_{orth} = \lVert \bar H \bar H^\top - I \rVert_2^2\) | Mean process bases should not align too strongly. |
-| Age-process covariance | \(L_{cov} = \lVert \mathrm{Cov}(\hat a(y), \hat r(y)) \rVert_F^2\) | Keep age and processes statistically separate. |
-| Process-age correlation | \(L_{proc\_age} = \sum_k \rho(\hat r_k(y), a(y))^2\) | Extra direct penalty against age leakage. |
-| Process latent sparsity | \(L_{proc\_sparse} = \lVert \hat r(y) \rVert_1\) | Encourage compact process codes. |
-| Reference process sparsity | \(L_{ref\_sparse} = \lVert \hat r(x) \rVert_1\) | `ref` subjects should have low process burden. |
-| Pairwise latent correlation | \(L_{pair} = \mathrm{mean}_{i \ne j}\,\rho(\hat r_i(y), \hat r_j(y))^2\) | Prevent all process latents from tracking the same scalar. |
+## 10. Why Not Use Agreement as a Loss?
 
-### Generator-collapse controls
+Agreement is computed **after training**, across repetitions. It is a model-selection criterion, not a differentiable within-epoch loss.
 
-These are the most important redesign additions because the earlier model family was failing by making all process axes either silent or redundant.
+So the workflow is:
 
-| Loss | Formula | Intuition |
-| --- | --- | --- |
-| Age sensitivity | \(L_{age\_sens} = \max(\tau_{age} - S_{age}, 0)\) | The generator must respond when age changes. |
-| Process sensitivity | \(L_{proc\_sens} = \max(\tau_{proc} - S_{proc}, 0)\) | The generator must respond when a process is activated. |
-| Generator separation | \(L_{gen\_sep} = \max(m - \mathrm{dist}(H_i, H_j), 0)\) | Different process bases should not collapse together. |
-| Generator redundancy | \(L_{gen\_red} = \mathrm{mean}_{i \ne j} |\mathrm{corr}(H_i, H_j)|\) | Penalize near-duplicate process bases directly. |
+- losses shape one training run,
+- selection metrics choose the best epoch inside each repetition,
+- agreement chooses the representative repetition for that run.
 
-Here \(S_{age}\) and \(S_{proc}\) are the percent-change sensitivities measured on a held-out set of `ref` subjects.
+Agreement answers “is this stable across reruns?”, not “what should the gradients be?”.
 
-### Optional directional priors
+## 11. Hemisphere Symmetry
 
-| Loss | Formula | Intuition |
-| --- | --- | --- |
-| Age shrinkage | \(L_{age\_shrink} = \mathrm{mean}\,\max(\Delta_{age}^{raw}, 0)\) | Penalize positive age-driven ROI growth. |
-| Process shrinkage | \(L_{proc\_shrink} = \mathrm{mean}\,\max(\Delta_{proc}^{raw}, 0)\) | Penalize positive process-driven ROI growth. |
+A symmetry prior is not currently active by default.
 
-These are useful as **priors or ablations**, but they are not biologically universal. Ventricles and CSF spaces often enlarge with age or disease, so shrinkage losses should not be treated as a default truth constraint.
+Reason:
 
-## What We Are Optimizing For
-
-The current method is trying to satisfy all of the following simultaneously:
-
-1. \(a\) should capture chronological age.
-2. \(r_k\) should carry little age leakage.
-3. Each \(r_k\) should drive a nontrivial generator response.
-4. Different \(r_k\) should drive different generator responses.
-5. The synthetic target should stay on a realistic `tar` manifold.
-
-That combination is the key difference between the redesigned model and the earlier failed extension, which often optimized age separation successfully while letting the generator remain silent or collapsed.
-
-## Why Hemisphere Symmetry Is Not a Default Loss
-
-A bilateral symmetry prior is tempting, but it is not currently enabled by default. The reason is scientific rather than technical:
-
-- age-related global atrophy is often roughly bilateral,
+- age/global atrophy is often approximately bilateral,
 - disease effects can be genuinely asymmetric,
-- forcing symmetry too early could erase the very lateralized structure we may want to discover.
+- adding a symmetry loss too early could make factors look neat while removing biologically real lateralization.
 
-If symmetry is tested later, it should be a mild ablation, ideally restricted to the **age basis** before being imposed on process bases.
+If symmetry is ever added, it should be a **mild ablation**, probably starting with the age basis rather than all process bases.

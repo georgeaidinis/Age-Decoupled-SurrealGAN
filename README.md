@@ -107,6 +107,8 @@ Detailed documentation lives in [`docs/`](docs):
 - [`docs/model_architecture.md`](docs/model_architecture.md): redesigned model structure, additive generator, decomposer, and latent inference path
 - [`docs/objectives_and_losses.md`](docs/objectives_and_losses.md): redesigned objectives, mathematical formulations, and rationale for each loss family
 - [`docs/metrics_and_logging.md`](docs/metrics_and_logging.md): metric definitions, TensorBoard organization, terminal logs, and text-readable outputs
+- [`docs/datasets_and_splits.md`](docs/datasets_and_splits.md): meaning of `train`, `val`, `id_test`, `ood_test`, and `application`
+- [`docs/model_selection_and_experiment_flow.md`](docs/model_selection_and_experiment_flow.md): end-to-end training, tuning, agreement, and final model selection algorithm
 - [`docs/pipeline_usage.md`](docs/pipeline_usage.md): command-line usage and experiment workflow
 - [`docs/slurm_workflows.md`](docs/slurm_workflows.md): cluster submission guidance and script usage
 - [`docs/scenario_matrix.md`](docs/scenario_matrix.md): large-scale train/tune scenarios and their scientific intent

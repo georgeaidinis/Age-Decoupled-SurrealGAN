@@ -500,7 +500,7 @@ export function App() {
             <input
               type="range"
               min={0.1}
-              max={10}
+              max={100}
               step={0.1}
               value={absoluteOverlayScale}
               onChange={(event) => setAbsoluteOverlayScale(Number(event.target.value))}
