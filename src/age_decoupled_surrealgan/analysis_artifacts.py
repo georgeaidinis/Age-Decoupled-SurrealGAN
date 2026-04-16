@@ -24,18 +24,24 @@ def _load_split_frame(processed_dir: Path, split_name: str) -> pd.DataFrame:
     return pd.read_csv(processed_dir / f"{split_name}.csv", low_memory=False)
 
 
-def _save_overlay(segmentation_img: Any, segmentation_data: np.ndarray, roi_df: pd.DataFrame, output_path: Path) -> None:
+def _save_overlay(
+    segmentation_img: Any,
+    segmentation_data: np.ndarray,
+    roi_df: pd.DataFrame,
+    output_path: Path,
+    value_column: str = "delta_std",
+) -> None:
     overlay_data = np.zeros(segmentation_data.shape, dtype=np.float32)
-    for row in roi_df[["roi_id", "percent_change"]].itertuples(index=False):
-        roi_id = int(row.roi_id)
-        overlay_data[segmentation_data == roi_id] = float(row.percent_change)
+    for roi_id, overlay_value in roi_df[["roi_id", value_column]].itertuples(index=False, name=None):
+        overlay_data[segmentation_data == int(roi_id)] = float(overlay_value)
     overlay_img = Nifti1Image(overlay_data, segmentation_img.affine, segmentation_img.header)
     overlay_img.to_filename(str(output_path))
 
 
 def _top_changes(frame: pd.DataFrame, limit: int = 10) -> pd.DataFrame:
-    return frame.assign(abs_percent_change=frame["percent_change"].abs()).sort_values(
-        ["abs_percent_change", "percent_change"], ascending=[False, False]
+    ranking_column = "delta_std" if "delta_std" in frame.columns else "delta"
+    return frame.assign(abs_rank_value=frame[ranking_column].abs()).sort_values(
+        ["abs_rank_value", ranking_column], ascending=[False, False]
     ).head(limit)
 
 
@@ -90,6 +96,7 @@ def _prediction_frame_for_split(
     normalization = checkpoint_normalization_payload(checkpoint)
     reference_norm = apply_feature_normalization(reference_template.reindex(feature_columns), normalization, feature_columns)
     ref_tensor = torch.tensor(reference_norm.reshape(-1), dtype=torch.float32, device=run_device)
+    metadata_columns = [column for column in frame.columns if column not in set(feature_columns) | {"eligible", "is_holdout_study"}]
     outputs: list[pd.DataFrame] = []
     with torch.no_grad():
         for start in range(0, len(frame), batch_size):
@@ -98,9 +105,7 @@ def _prediction_frame_for_split(
             features = torch.tensor(features_norm, dtype=torch.float32, device=run_device)
             reference = ref_tensor.unsqueeze(0).repeat(features.shape[0], 1)
             prediction = model.infer(features, reference)
-            block = batch[
-                ["subject_id", "study", "age", "sex", "diagnosis_raw", "diagnosis_group", "cohort_bucket"]
-            ].copy()
+            block = batch[metadata_columns].copy()
             block["age_latent"] = prediction["age_latent"].detach().cpu().numpy().reshape(-1)
             process = prediction["process_latents"].detach().cpu().numpy()
             for idx in range(n_processes):
@@ -133,6 +138,11 @@ def _compute_population_patterns(
     reference_frame = _load_split_frame(processed_dir, "train")
     reference_frame = reference_frame.loc[reference_frame["cohort_bucket"] == "ref"].dropna(subset=feature_columns)
     normalization = checkpoint_normalization_payload(checkpoint)
+    scale_map = normalization.get("scale", {})
+    normalization_scale = np.asarray(
+        [max(float(scale_map.get(name, 1.0)), 1.0e-6) for name in feature_columns],
+        dtype=np.float32,
+    )
     reference_raw = reference_frame[feature_columns].to_numpy(dtype="float32")
     features = torch.tensor(
         apply_feature_normalization(reference_frame[feature_columns], normalization, feature_columns),
@@ -182,14 +192,20 @@ def _compute_population_patterns(
             normalization,
             feature_columns,
         ) + reference_raw
-        age_percent = ((age_delta_raw / baseline_abs_np) * 100.0).mean(axis=0)
         age_mean_delta = age_delta_raw.mean(axis=0)
         age_baseline = reference_raw.mean(axis=0)
         age_predicted = age_high_target_raw.mean(axis=0)
+        age_percent = np.divide(
+            age_mean_delta,
+            np.clip(np.abs(age_baseline), 1.0, None),
+            out=np.zeros_like(age_mean_delta, dtype=np.float32),
+        ) * 100.0
+        age_delta_std = age_mean_delta / normalization_scale
         age_table = roi_df.copy()
         age_table["baseline_value"] = age_baseline
         age_table["predicted_value"] = age_predicted
         age_table["delta"] = age_mean_delta
+        age_table["delta_std"] = age_delta_std
         age_table["percent_change"] = age_percent
         age_csv = analysis_dir / "age.csv"
         age_json = analysis_dir / "age.json"
@@ -241,14 +257,20 @@ def _compute_population_patterns(
                 normalization,
                 feature_columns,
             ) + reference_raw
-            process_percent = ((process_delta / baseline_abs_np) * 100.0).mean(axis=0)
             process_mean_delta = process_delta.mean(axis=0)
             process_baseline = process_baseline_raw.mean(axis=0)
             process_predicted = process_target_raw.mean(axis=0)
+            process_percent = np.divide(
+                process_mean_delta,
+                np.clip(np.abs(process_baseline), 1.0, None),
+                out=np.zeros_like(process_mean_delta, dtype=np.float32),
+            ) * 100.0
+            process_delta_std = process_mean_delta / normalization_scale
             process_table = roi_df.copy()
             process_table["baseline_value"] = process_baseline
             process_table["predicted_value"] = process_predicted
             process_table["delta"] = process_mean_delta
+            process_table["delta_std"] = process_delta_std
             process_table["percent_change"] = process_percent
             pattern_key = f"r{idx + 1}"
             pattern_csv = analysis_dir / f"{pattern_key}.csv"
@@ -347,10 +369,21 @@ def _compute_correlation_artifacts(run_dir: Path, n_processes: int) -> dict[str,
             continue
         split_name = prediction_path.stem
         frame = pd.read_csv(prediction_path)
-        numeric = frame[["age", "age_latent"] + [f"r{i + 1}" for i in range(n_processes)]].copy()
-        diagnosis_dummies = pd.get_dummies(frame["diagnosis_group"], prefix="dx", dtype=float)
-        study_dummies = pd.get_dummies(frame["study"], prefix="study", dtype=float)
-        corr_frame = pd.concat([numeric, diagnosis_dummies, study_dummies], axis=1)
+        base_numeric_columns = ["age", "age_latent"] + [f"r{i + 1}" for i in range(n_processes)]
+        numeric = frame[base_numeric_columns].copy()
+        extra_numeric_columns = []
+        for column in frame.columns:
+            if column in base_numeric_columns or column in {"subject_id", "study", "diagnosis_group", "diagnosis_raw", "sex", "cohort_bucket"}:
+                continue
+            converted = pd.to_numeric(frame[column], errors="coerce")
+            if converted.notna().sum() >= max(10, int(0.5 * len(frame))):
+                numeric[column] = converted
+                extra_numeric_columns.append(column)
+        dummy_blocks = []
+        for column, prefix in [("diagnosis_group", "dx"), ("study", "study"), ("sex", "sex"), ("cohort_bucket", "bucket")]:
+            if column in frame.columns:
+                dummy_blocks.append(pd.get_dummies(frame[column], prefix=prefix, dtype=float))
+        corr_frame = pd.concat([numeric, *dummy_blocks], axis=1)
         corr = corr_frame.corr(numeric_only=True).fillna(0.0)
         corr_csv = output_dir / f"{split_name}_matrix.csv"
         corr_png = output_dir / f"{split_name}_heatmap.png"
@@ -360,6 +393,7 @@ def _compute_correlation_artifacts(run_dir: Path, n_processes: int) -> dict[str,
             "matrix_csv": corr_csv.name,
             "heatmap_png": corr_png.name,
             "n_variables": int(corr.shape[0]),
+            "extra_numeric_columns": extra_numeric_columns,
         }
     save_json(output_dir / "manifest.json", manifests)
     return manifests
@@ -374,11 +408,12 @@ def ensure_prediction_splits(
     feature_columns: list[str],
     reference_template: pd.Series,
     device: str,
+    force: bool = False,
 ) -> None:
     prediction_dir = ensure_dir(run_dir / "predictions")
     for split_name in ["train", "val", "id_test", "ood_test", "application"]:
         target_path = prediction_dir / f"{split_name}.csv"
-        if target_path.exists():
+        if target_path.exists() and not force:
             continue
         frame = _load_split_frame(processed_dir, split_name)
         prediction = _prediction_frame_for_split(
@@ -418,6 +453,7 @@ def build_run_analysis_artifacts(
         feature_columns=feature_columns,
         reference_template=reference_template,
         device=device or config.training.device,
+        force=force,
     )
 
     manifest_path = analysis_dir / "manifest.json"

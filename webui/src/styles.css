@@ -107,6 +107,10 @@ input[type="range"] {
   color: white;
 }
 
+.segmented-control-compact button {
+  flex: 0 0 auto;
+}
+
 .panel {
   background: rgba(255, 255, 255, 0.86);
   border-radius: 22px;
@@ -164,6 +168,23 @@ input[type="range"] {
   margin: 0;
 }
 
+.latent-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.latent-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(20, 36, 50, 0.08);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .subject-meta div {
   padding: 10px 12px;
   border-radius: 14px;
@@ -200,6 +221,10 @@ input[type="range"] {
   background: linear-gradient(90deg, rgba(214, 69, 65, 0.95) 0%, rgba(240, 240, 240, 0.25) 50%, rgba(55, 128, 220, 0.95) 100%);
 }
 
+.overlay-legend-bar.colorblind {
+  background: linear-gradient(90deg, rgba(198, 132, 40, 0.95) 0%, rgba(240, 240, 240, 0.25) 50%, rgba(41, 132, 188, 0.95) 100%);
+}
+
 .overlay-legend-label {
   font-size: 0.8rem;
   line-height: 1.35;
@@ -216,7 +241,7 @@ input[type="range"] {
 
 .crosshair-readout {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }

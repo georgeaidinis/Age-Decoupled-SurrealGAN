@@ -5,6 +5,7 @@ import type { RoiMetadataRow } from "../lib/api";
 
 type RoiValueRow = {
   delta: number;
+  delta_std: number;
   percent_change: number;
   baseline_value?: number;
   predicted_value?: number;
@@ -18,6 +19,7 @@ type BrainViewerProps = {
   overlayOpacity?: number;
   mode: "slices" | "volume";
   overlayScaleMode: "relative" | "absolute";
+  colorblindMode?: boolean;
   roiMetadataById: Record<number, RoiMetadataRow>;
   roiValueById: Record<number, RoiValueRow>;
 };
@@ -36,6 +38,8 @@ type CrosshairInfo = {
   primaryValue: string;
   secondaryLabel: string;
   secondaryValue: string;
+  tertiaryLabel: string;
+  tertiaryValue: string;
   voxelLabel: string;
 };
 
@@ -58,6 +62,7 @@ export function BrainViewer({
   overlayOpacity = 0.38,
   mode,
   overlayScaleMode,
+  colorblindMode = false,
   roiMetadataById,
   roiValueById,
 }: BrainViewerProps) {
@@ -70,10 +75,12 @@ export function BrainViewer({
       roiId: null,
       roiName: "Move the crosshairs",
       roiFullName: "Crosshair readout updates with the ROI label and the current change value.",
-      primaryLabel: overlayScaleMode === "relative" ? "Relative overlay" : "Absolute change",
+      primaryLabel: overlayScaleMode === "relative" ? "Relative overlay" : "Standardized change",
       primaryValue: "N/A",
       secondaryLabel: "ROI delta",
       secondaryValue: "N/A",
+      tertiaryLabel: "Percent vs baseline",
+      tertiaryValue: "N/A",
       voxelLabel: "Voxel: N/A",
     }),
     [overlayScaleMode],
@@ -107,7 +114,8 @@ export function BrainViewer({
         const roiValues = roiId > 0 ? roiValueById[roiId] : undefined;
         const absolutePercent = Number(roiValues?.percent_change ?? 0);
         const absoluteDelta = Number(roiValues?.delta ?? 0);
-        const relativePercent = overlayAbsMax > 1e-6 ? (absolutePercent / overlayAbsMax) * 100.0 : 0.0;
+        const absoluteDeltaStd = Number(roiValues?.delta_std ?? 0);
+        const relativePercent = overlayAbsMax > 1e-6 ? (absoluteDeltaStd / overlayAbsMax) * 100.0 : 0.0;
         const vox = Array.isArray(payload.vox) ? payload.vox.slice(0, 3).map((value) => Math.round(Number(value))) : [];
         const voxelLabel = vox.length === 3 ? `Voxel: ${vox[0]}, ${vox[1]}, ${vox[2]}` : "Voxel: N/A";
 
@@ -125,10 +133,12 @@ export function BrainViewer({
             roiFullName: rawValues
               ? `The current crosshair location does not map to a retained MUSE ROI. Raw values: ${rawValues}`
               : "The current crosshair location does not map to a retained MUSE ROI.",
-            primaryLabel: overlayScaleMode === "relative" ? "Relative overlay" : "Absolute change",
+            primaryLabel: overlayScaleMode === "relative" ? "Relative overlay" : "Standardized change",
             primaryValue: "0.00",
             secondaryLabel: "ROI delta",
             secondaryValue: "0.00",
+            tertiaryLabel: "Percent vs baseline",
+            tertiaryValue: "0.00%",
             voxelLabel,
           });
           return;
@@ -138,13 +148,15 @@ export function BrainViewer({
           roiId,
           roiName: metadata.roi_name || metadata.roi_full_name || `ROI ${roiId}`,
           roiFullName: metadata.roi_full_name || metadata.roi_name || `ROI ${roiId}`,
-          primaryLabel: overlayScaleMode === "relative" ? "Relative overlay" : "Absolute change",
+          primaryLabel: overlayScaleMode === "relative" ? "Relative overlay" : "Standardized change",
           primaryValue:
             overlayScaleMode === "relative"
               ? `${formatSigned(relativePercent, "%")} of current display range`
-              : formatSigned(absolutePercent, "%"),
+              : `${formatSigned(absoluteDeltaStd)} SD`,
           secondaryLabel: "ROI delta",
           secondaryValue: `${formatSigned(absoluteDelta)} raw units`,
+          tertiaryLabel: "Percent vs baseline",
+          tertiaryValue: formatSigned(absolutePercent, "%"),
           voxelLabel,
         });
       };
@@ -162,6 +174,20 @@ export function BrainViewer({
         A: [0, 24, 92, 160],
         I: [0, 96, 180, 255],
       });
+      nv.addColormap("roi-positive-colorblind", {
+        R: [0, 44, 85, 126],
+        G: [0, 123, 163, 205],
+        B: [0, 182, 207, 220],
+        A: [0, 24, 92, 160],
+        I: [0, 96, 180, 255],
+      });
+      nv.addColormap("roi-negative-colorblind", {
+        R: [0, 126, 184, 230],
+        G: [0, 84, 121, 159],
+        B: [0, 25, 40, 0],
+        A: [0, 24, 92, 160],
+        I: [0, 96, 180, 255],
+      });
       const volumes: any[] = [
         { url: atlasImageUrl, opacity: 1, colormap: "gray" },
         { url: atlasSegmentationUrl, opacity: 0, colormap: "gray" },
@@ -172,8 +198,8 @@ export function BrainViewer({
         volumes.push({
           url: overlayImageUrl,
           opacity: mode === "volume" ? Math.min(overlayOpacity, 0.22) : overlayOpacity,
-          colormap: "roi-positive",
-          colormapNegative: "roi-negative",
+          colormap: colorblindMode ? "roi-positive-colorblind" : "roi-positive",
+          colormapNegative: colorblindMode ? "roi-negative-colorblind" : "roi-negative",
           cal_min: threshold,
           cal_max: scale,
           cal_minNeg: -scale,
@@ -214,6 +240,7 @@ export function BrainViewer({
     overlayOpacity,
     mode,
     overlayScaleMode,
+    colorblindMode,
     roiMetadataById,
     roiValueById,
   ]);
@@ -227,9 +254,9 @@ export function BrainViewer({
         <p>Axial, coronal, sagittal slices by default, with optional 3D volume rendering and signed ROI overlays.</p>
       </div>
       <div className="overlay-legend" aria-label="Overlay legend">
-        <span className="overlay-legend-label negative">Red: negative change, ROI volume loss</span>
-        <div className="overlay-legend-bar" />
-        <span className="overlay-legend-label positive">Blue: positive change, ROI enlargement</span>
+        <span className="overlay-legend-label negative">Negative change</span>
+        <div className={`overlay-legend-bar${colorblindMode ? " colorblind" : ""}`} />
+        <span className="overlay-legend-label positive">Positive change</span>
       </div>
       <div className="crosshair-readout">
         <div className="crosshair-readout-main">
@@ -244,6 +271,10 @@ export function BrainViewer({
         <div className="crosshair-stat">
           <span>{displayInfo.secondaryLabel}</span>
           <strong>{displayInfo.secondaryValue}</strong>
+        </div>
+        <div className="crosshair-stat">
+          <span>{displayInfo.tertiaryLabel}</span>
+          <strong>{displayInfo.tertiaryValue}</strong>
         </div>
         <div className="crosshair-stat">
           <span>Location</span>

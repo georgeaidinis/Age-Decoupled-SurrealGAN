@@ -148,6 +148,44 @@ class AgeDecoupledTrainer:
             frame = frame.loc[frame["cohort_bucket"] == "ref"].dropna(subset=self.feature_columns)
         return frame
 
+    def _prediction_metadata_columns(self, frame: pd.DataFrame) -> list[str]:
+        """Return non-feature columns that should travel with saved latent predictions."""
+        excluded = set(self.feature_columns) | {"eligible", "is_holdout_study"}
+        return [column for column in frame.columns if column not in excluded]
+
+    def _selection_metrics(
+        self,
+        metrics: dict[str, Any],
+        sensitivity_metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Combine age/disentanglement metrics with generator-response probes.
+
+        These scores are used for within-repetition epoch selection only. The final
+        cross-configuration choice is handled later through admissibility screening plus
+        agreement across repetitions/runs.
+        """
+        latent_collapse = float(metrics.get("process_latent_pairwise_correlation_abs_mean", 0.0))
+        selection_score = float(
+            metrics["composite_score"]
+            + 0.25 * sensitivity_metrics["generator_response_score"]
+            - 0.5 * latent_collapse
+        )
+        collapse_aware_selection_score = float(
+            metrics["composite_score"]
+            + 0.25 * sensitivity_metrics["generator_response_noncollapse_score"]
+            - 0.75 * latent_collapse
+        )
+        return {
+            **metrics,
+            **sensitivity_metrics,
+            "selection_score": selection_score,
+            "collapse_aware_selection_score": collapse_aware_selection_score,
+            # Backward-compatible aliases retained for older configs and dashboards.
+            "quality_score": selection_score,
+            "directional_quality_score": selection_score,
+            "collapse_aware_quality_score": collapse_aware_selection_score,
+        }
+
     def _age_tensor(self, value_years: float, batch_size: int, device: torch.device) -> torch.Tensor:
         normalized = normalize_age_years(value_years, self.config)
         return torch.full((batch_size, self.config.model.age_latent_dim), normalized, device=device, dtype=torch.float32)
@@ -158,6 +196,12 @@ class AgeDecoupledTrainer:
         reference_features: torch.Tensor,
         reference_raw: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Probe whether isolated age/process perturbations produce nontrivial anatomy changes.
+
+        These are direct generator-response measurements, not correlations with chronological
+        age. They are intentionally evaluated on reference subjects so the probes stay close to
+        the forward-transform regime the model was trained on.
+        """
         batch = reference_features.shape[0]
         baseline_abs = reference_raw.abs().clamp_min(1.0)
         zero_process = torch.zeros(batch, self.config.model.n_processes, device=reference_features.device)
@@ -309,6 +353,8 @@ class AgeDecoupledTrainer:
             interval = self.config.training.save_every
         else:
             target = max(1, self.config.training.target_regular_checkpoints)
+            if self.config.training.target_regular_checkpoints <= 0:
+                return []
             interval = max(1, -(-self.config.training.epochs // target))
         epochs = sorted(set(range(interval, self.config.training.epochs + 1, interval)))
         if self.config.training.epochs not in epochs:
@@ -338,8 +384,24 @@ class AgeDecoupledTrainer:
         )
 
     def _run_dir(self, trial_name: str | None = None) -> Path:
+        def short_label(value: str) -> str:
+            label = value.strip()
+            for prefix in [
+                "age-decoupled-surrealgan-",
+                "age-decoupled-surrealgan_",
+                "age-decoupled-surrealgan",
+                "scenario-",
+            ]:
+                if label.startswith(prefix):
+                    label = label[len(prefix) :]
+            label = label.replace(" ", "-")
+            while "--" in label:
+                label = label.replace("--", "-")
+            return label.strip("-_") or "run"
+
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = self.config.experiment_name if trial_name is None else f"{self.config.experiment_name}_{trial_name}"
+        base_name = short_label(self.config.experiment_name)
+        name = base_name if trial_name is None else f"{base_name}_{short_label(trial_name)}"
         return ensure_dir(Path(self.config.paths.runs_dir) / f"{stamp}_{name}")
 
     def _save_checkpoint(
@@ -405,6 +467,7 @@ class AgeDecoupledTrainer:
         split_name: str,
     ) -> pd.DataFrame:
         frame = self._load_split(split_name)
+        metadata_columns = self._prediction_metadata_columns(frame)
         feature_values = apply_feature_normalization(frame[self.feature_columns], self.normalization, self.feature_columns)
         features = torch.tensor(feature_values, dtype=torch.float32, device=self.device)
         reference_values = torch.tensor(
@@ -414,9 +477,7 @@ class AgeDecoupledTrainer:
         )
         reference = reference_values.unsqueeze(0).repeat(features.shape[0], 1)
         outputs = model.infer(features, reference)
-        result = frame[
-            ["subject_id", "study", "age", "sex", "diagnosis_raw", "diagnosis_group", "cohort_bucket"]
-        ].copy()
+        result = frame[metadata_columns].copy()
         result["age_latent"] = outputs["age_latent"].detach().cpu().numpy().reshape(-1)
         process = outputs["process_latents"].detach().cpu().numpy()
         for idx in range(self.config.model.n_processes):
@@ -427,27 +488,7 @@ class AgeDecoupledTrainer:
         prediction_frame = self._predict_split(model, split_name)
         metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
         sensitivity_metrics = self._compute_latent_sensitivity_metrics(model, split_name)
-        latent_collapse = float(metrics.get("process_latent_pairwise_correlation_abs_mean", 0.0))
-        metrics = {
-            **metrics,
-            **sensitivity_metrics,
-            "quality_score": float(
-                metrics["composite_score"]
-                + 0.25 * sensitivity_metrics["latent_sensitivity_score"]
-                - 0.5 * latent_collapse
-            ),
-            "directional_quality_score": float(
-                metrics["composite_score"]
-                + 0.25 * sensitivity_metrics["directional_latent_sensitivity_score"]
-                - 0.5 * latent_collapse
-            ),
-            "collapse_aware_quality_score": float(
-                metrics["composite_score"]
-                + 0.25 * sensitivity_metrics["collapse_aware_latent_sensitivity_score"]
-                - 0.75 * latent_collapse
-            ),
-        }
-        return metrics, prediction_frame
+        return self._selection_metrics(metrics, sensitivity_metrics), prediction_frame
 
     def _sample_process_latents(self, batch_size: int, device: torch.device) -> torch.Tensor:
         if not self.config.training.sampled_process_one_hot_only:
@@ -709,7 +750,7 @@ class AgeDecoupledTrainer:
                 (
                     "ROI normalization: "
                     f"method={self.normalization.get('method', 'none')}, clip={self.normalization.get('clip')}, "
-                    f"use_amp={self.config.training.use_amp}"
+                    f"use_amp={self.config.training.use_amp}, monitor_metric={self.config.training.monitor_metric}"
                 ),
             ]
         )
@@ -937,33 +978,13 @@ class AgeDecoupledTrainer:
             metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
             sensitivity_metrics = self._compute_latent_sensitivity_metrics(best_model, split_name)
             evaluation_seconds = time.perf_counter() - evaluation_timer_start
-            latent_collapse = float(metrics.get("process_latent_pairwise_correlation_abs_mean", 0.0))
-            metrics = {
-                **metrics,
-                **sensitivity_metrics,
-                "quality_score": float(
-                    metrics["composite_score"]
-                    + 0.25 * sensitivity_metrics["latent_sensitivity_score"]
-                    - 0.5 * latent_collapse
-                ),
-                "directional_quality_score": float(
-                    metrics["composite_score"]
-                    + 0.25 * sensitivity_metrics["directional_latent_sensitivity_score"]
-                    - 0.5 * latent_collapse
-                ),
-                "collapse_aware_quality_score": float(
-                    metrics["composite_score"]
-                    + 0.25 * sensitivity_metrics["collapse_aware_latent_sensitivity_score"]
-                    - 0.75 * latent_collapse
-                ),
-            }
-            split_metrics[split_name] = metrics
+            split_metrics[split_name] = self._selection_metrics(metrics, sensitivity_metrics)
             split_timing[split_name] = {
                 "prediction_seconds": inference_seconds,
                 "evaluation_seconds": evaluation_seconds,
                 "total_seconds": time.perf_counter() - split_timer_start,
             }
-            save_metrics(metrics, run_dir / "metrics" / f"{split_name}.json")
+            save_metrics(split_metrics[split_name], run_dir / "metrics" / f"{split_name}.json")
             split_line = (
                 f"Completed split {split_name}: "
                 f"predict={format_duration(inference_seconds)} "

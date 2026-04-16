@@ -1,4 +1,4 @@
-experiment_name = "age-decoupled-surrealgan-redesign-train"
+experiment_name = "redesign_train"
 
 [model]
 n_processes = 5
@@ -15,7 +15,7 @@ epochs = 100
 batch_size = 128
 learning_rate = 0.00015
 discriminator_learning_rate = 0.00008
-monitor_metric = "collapse_aware_quality_score"
+monitor_metric = "collapse_aware_selection_score"
 sensitivity_eval_subjects = 128
 sensitivity_process_anchor_age = 50.0
 
@@ -28,13 +28,13 @@ latent_reconstruction = 2.5
 decomposition = 2.5
 identity = 0.75
 monotonicity = 1.0
-process_orthogonality = 0.35
-age_process_covariance = 0.25
-reference_process_sparsity = 0.05
-change_magnitude = 0.05
+process_orthogonality = 0.0
+age_process_covariance = 0.0
+reference_process_sparsity = 0.02
+change_magnitude = 0.02
 low_activation_identity = 0.35
 process_age_correlation = 0.15
-process_latent_sparsity = 0.05
+process_latent_sparsity = 0.02
 age_sensitivity = 0.5
 process_sensitivity = 1.5
 age_sensitivity_target_pct = 0.25

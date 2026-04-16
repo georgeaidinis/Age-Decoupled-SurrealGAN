@@ -19,7 +19,7 @@ export function SliderPanel({
     <section className="panel slider-panel">
       <div className="panel-header">
         <h3>Latent Controls</h3>
-        <p>Adjust age and process sliders, then click Generate to predict ROI changes and update the atlas overlay.</p>
+        <p>Adjust age and process sliders, then click Generate to show the anchored edit relative to the selected subject's inferred current state.</p>
       </div>
 
       <div className="slider-grid">

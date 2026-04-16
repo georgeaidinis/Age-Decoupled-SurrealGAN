@@ -107,6 +107,13 @@ def normalize_age_years(age_years: float, config: ProjectConfig) -> float:
     return float((clipped - age_min) / (age_max - age_min))
 
 
+def denormalize_age_years(age_latent: float, config: ProjectConfig) -> float:
+    age_min = float(config.data.age_latent_normalization_min)
+    age_max = float(config.data.age_latent_normalization_max)
+    clipped = min(max(float(age_latent), 0.0), 1.0)
+    return float(age_min + clipped * max(age_max - age_min, 0.0))
+
+
 def load_run_summary(run_dir: str | Path) -> dict[str, Any]:
     path = Path(run_dir) / "run_summary.json"
     with path.open("r", encoding="utf-8") as handle:
@@ -179,6 +186,11 @@ def infer_subject_defaults(
     feature_columns: list[str],
     device: str = "cpu",
 ) -> dict[str, Any]:
+    """Infer the subject's default latent coordinates without applying any edit.
+
+    This is the anchor state used by the GUI. It provides the model-implied age/process
+    location for the selected subject before any user-driven perturbation is applied.
+    """
     model, checkpoint = load_checkpoint(checkpoint_path, device=device)
     run_device = resolve_device(device)
     feature_values = _numeric_feature_series(row, feature_columns)
@@ -192,6 +204,7 @@ def infer_subject_defaults(
     return {
         "n_processes": int(checkpoint["n_processes"]),
         "age_latent": float(age_latent.detach().cpu().numpy().reshape(-1)[0]),
+        "predicted_age_years": denormalize_age_years(float(age_latent.detach().cpu().numpy().reshape(-1)[0]), _build_config_from_payload(checkpoint.get("config"))),
         "process_latents": process_latents.detach().cpu().numpy().reshape(-1).tolist(),
     }
 
@@ -275,6 +288,16 @@ def generate_single_row(
     process_latents: list[float] | None,
     device: str = "cpu",
 ) -> dict[str, Any]:
+    """Generate a subject-level edited trajectory anchored to the subject's current state.
+
+    For the redesigned additive model we display the difference
+
+        G(x_subject, a_requested, r_requested) - G(x_subject, a_anchor, r_default),
+
+    where `a_anchor` is the subject's observed chronological age mapped into latent space and
+    `r_default` are the inferred process latents for the selected subject. This makes "leave the
+    subject where they are now" correspond to approximately zero displayed change.
+    """
     model, checkpoint = load_checkpoint(checkpoint_path, device=device)
     if checkpoint_model_version(checkpoint) != AgeDecoupledSurrealGAN.model_version:
         return _generate_single_row_legacy(
@@ -296,9 +319,15 @@ def generate_single_row(
     baseline_tensor = torch.tensor(baseline_norm, dtype=torch.float32, device=run_device)
 
     age_default, process_defaults, _, _ = model.infer_latents(baseline_tensor)  # type: ignore[attr-defined]
+    subject_age_years = (
+        float(row.get("age"))
+        if row.get("age") is not None and not pd.isna(row.get("age"))
+        else denormalize_age_years(float(age_default.detach().cpu().numpy().reshape(-1)[0]), config)
+    )
+    anchor_age_latent = torch.full_like(age_default, normalize_age_years(subject_age_years, config))
     if age_years is None:
-        requested_age_years = float(row.get("age", config.data.age_latent_normalization_min))
-        age_latent_tensor = age_default
+        requested_age_years = float(subject_age_years)
+        age_latent_tensor = anchor_age_latent
     else:
         requested_age_years = float(age_years)
         age_latent_tensor = torch.full_like(age_default, normalize_age_years(requested_age_years, config))
@@ -310,21 +339,28 @@ def generate_single_row(
         process_latent_tensor = torch.tensor([process_latents], dtype=torch.float32, device=run_device)
 
     with torch.no_grad():
-        synth = model.synthesize_full(baseline_tensor, age_latent_tensor, process_latent_tensor)  # type: ignore[attr-defined]
+        requested_synth = model.synthesize_full(baseline_tensor, age_latent_tensor, process_latent_tensor)  # type: ignore[attr-defined]
+        anchor_synth = model.synthesize_full(baseline_tensor, anchor_age_latent, process_defaults)  # type: ignore[attr-defined]
+
+    anchored_delta_norm = requested_synth.total_delta - anchor_synth.total_delta
+    anchored_age_delta_norm = requested_synth.age_component - anchor_synth.age_component
+    anchored_process_delta_norm = requested_synth.process_components - anchor_synth.process_components
+    synthetic_target_norm = baseline_tensor.detach().cpu().numpy() + anchored_delta_norm.detach().cpu().numpy()
 
     baseline_target = invert_feature_normalization(baseline_norm, normalization, feature_columns).reshape(-1)
     synthetic_target = invert_feature_normalization(
-        synth.fake_target.detach().cpu().numpy(),
+        synthetic_target_norm,
         normalization,
         feature_columns,
     ).reshape(-1)
-    raw_delta = scale_delta_to_raw(synth.total_delta.detach().cpu().numpy(), normalization, feature_columns).reshape(-1)
-    age_delta = scale_delta_to_raw(synth.age_component.detach().cpu().numpy(), normalization, feature_columns).reshape(-1)
+    raw_delta = scale_delta_to_raw(anchored_delta_norm.detach().cpu().numpy(), normalization, feature_columns).reshape(-1)
+    age_delta = scale_delta_to_raw(anchored_age_delta_norm.detach().cpu().numpy(), normalization, feature_columns).reshape(-1)
     process_deltas = scale_delta_to_raw(
-        synth.process_components.detach().cpu().numpy().reshape(checkpoint["n_processes"], -1),
+        anchored_process_delta_norm.detach().cpu().numpy().reshape(checkpoint["n_processes"], -1),
         normalization,
         feature_columns,
     ).reshape(checkpoint["n_processes"], -1)
+    normalized_delta = anchored_delta_norm.detach().cpu().numpy().reshape(-1)
 
     baseline_abs = np.abs(baseline_raw)
     percent_change = np.zeros_like(raw_delta, dtype=np.float32)
@@ -332,20 +368,24 @@ def generate_single_row(
     percent_change[valid_mask] = (raw_delta[valid_mask] / baseline_abs[valid_mask]) * 100.0
     return {
         "n_processes": int(checkpoint["n_processes"]),
+        "ground_truth_age_years": float(subject_age_years),
         "requested_age_years": requested_age_years,
         "age_latent": float(age_latent_tensor.detach().cpu().numpy().reshape(-1)[0]),
         "default_age_latent": float(age_default.detach().cpu().numpy().reshape(-1)[0]),
+        "predicted_age_years": denormalize_age_years(float(age_default.detach().cpu().numpy().reshape(-1)[0]), config),
         "process_latents": process_latent_tensor.detach().cpu().numpy().reshape(-1).tolist(),
         "default_process_latents": process_defaults.detach().cpu().numpy().reshape(-1).tolist(),
         "baseline_target": baseline_target.tolist(),
         "synthetic_target": synthetic_target.tolist(),
         "synthetic_delta": raw_delta.tolist(),
+        "synthetic_delta_std": normalized_delta.tolist(),
         "percent_change": percent_change.tolist(),
         "age_delta": age_delta.tolist(),
         "process_deltas": process_deltas.tolist(),
         "debug": {
-            "generation_mode": "direct_sampled_additive",
+            "generation_mode": "anchored_subject_delta",
             "delta_abs_max": float(np.abs(raw_delta).max()),
             "delta_abs_mean": float(np.abs(raw_delta).mean()),
+            "anchor_age_years": float(subject_age_years),
         },
     }

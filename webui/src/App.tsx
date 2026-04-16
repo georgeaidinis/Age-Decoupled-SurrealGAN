@@ -6,8 +6,8 @@ import { LatentSpaceExplorer } from "./components/LatentSpaceExplorer";
 import { SliderPanel } from "./components/SliderPanel";
 import {
   atlasManifest,
-  getLatentSpace,
   getAtlasRoiMetadata,
+  getLatentSpace,
   getPopulationPattern,
   getPopulationPatterns,
   getRunMetadata,
@@ -20,12 +20,53 @@ import {
   type PopulationPatternManifest,
   type PopulationPatternResponse,
   type RoiMetadataRow,
+  type SubjectDefaultsResponse,
   type SubjectRow,
 } from "./lib/api";
 
 type RunMetadata = {
   n_processes: number;
 };
+
+type ChartMetric = "delta_std" | "delta" | "percent_change";
+
+type RoiChartRow = {
+  roi_id?: number;
+  name: string;
+  percent_change: number;
+  delta: number;
+  delta_std: number;
+  baseline_value: number;
+  predicted_value: number;
+};
+
+function computePercentChange(baselineValue: number, predictedValue: number): number {
+  const denominator = Math.max(Math.abs(baselineValue), 1.0);
+  return ((predictedValue - baselineValue) / denominator) * 100.0;
+}
+
+function formatMetricValue(metric: ChartMetric, value: number): string {
+  if (!Number.isFinite(value)) {
+    return "N/A";
+  }
+  if (metric === "percent_change") {
+    return `${value.toFixed(1)}%`;
+  }
+  if (metric === "delta") {
+    return value.toFixed(1);
+  }
+  return value.toFixed(2);
+}
+
+function metricLabel(metric: ChartMetric): string {
+  if (metric === "delta_std") {
+    return "Standardized delta";
+  }
+  if (metric === "delta") {
+    return "Raw delta";
+  }
+  return "Percent vs baseline";
+}
 
 export function App() {
   const [runs, setRuns] = useState<Array<{ run_name: string }>>([]);
@@ -35,14 +76,17 @@ export function App() {
   const [subjects, setSubjects] = useState<SubjectRow[]>([]);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
   const [subjectMetadata, setSubjectMetadata] = useState<Record<string, string | number | null> | null>(null);
+  const [subjectDefaults, setSubjectDefaults] = useState<SubjectDefaultsResponse["defaults"] | null>(null);
   const [inference, setInference] = useState<InferenceResponse | null>(null);
   const [ageYears, setAgeYears] = useState(20);
   const [processLatents, setProcessLatents] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<"slices" | "volume">("slices");
   const [displayMode, setDisplayMode] = useState<"subject" | "population">("subject");
   const [overlayScaleMode, setOverlayScaleMode] = useState<"relative" | "absolute">("relative");
+  const [roiChartMetric, setRoiChartMetric] = useState<ChartMetric>("delta_std");
   const [overlayOpacity, setOverlayOpacity] = useState(0.38);
   const [absoluteOverlayScale, setAbsoluteOverlayScale] = useState(1.0);
+  const [colorblindMode, setColorblindMode] = useState(false);
   const [atlasUrls, setAtlasUrls] = useState<{ atlas_image_url: string; atlas_segmentation_url: string } | null>(null);
   const [roiMetadata, setRoiMetadata] = useState<RoiMetadataRow[]>([]);
   const [overlayImageUrl, setOverlayImageUrl] = useState<string | null>(null);
@@ -77,6 +121,7 @@ export function App() {
       setSubjects([]);
       setSelectedRow(null);
       setSubjectMetadata(null);
+      setSubjectDefaults(null);
       setInference(null);
       setOverlayImageUrl(null);
       setAgeYears(20);
@@ -170,6 +215,7 @@ export function App() {
     setSubjects([]);
     setSelectedRow(null);
     setSubjectMetadata(null);
+    setSubjectDefaults(null);
     setInference(null);
     setOverlayImageUrl(null);
     setError(null);
@@ -232,6 +278,7 @@ export function App() {
           return;
         }
         setSubjectMetadata(payload.metadata);
+        setSubjectDefaults(payload.defaults);
         setAgeYears(payload.defaults.age_years);
         setProcessLatents(payload.defaults.process_latents);
       })
@@ -272,14 +319,16 @@ export function App() {
       .finally(() => setLoadingInference(false));
   };
 
-  const topChanges = useMemo(
+  const roiRows = useMemo<RoiChartRow[]>(
     () =>
-      ((displayMode === "population" ? populationPattern?.top_changes : inference?.top_changes) ?? []).map((row) => ({
+      ((displayMode === "population" ? populationPattern?.roi_table : inference?.roi_table) ?? []).map((row) => ({
+        roi_id: Number.isFinite(Number(row.roi_id)) ? Number(row.roi_id) : undefined,
         name: row.roi_name ?? row.roi_full_name ?? "Unknown ROI",
-        percent_change: Number(row.percent_change ?? 0),
         delta: Number(row.delta ?? 0),
+        delta_std: Number(row.delta_std ?? 0),
         baseline_value: Number(row.baseline_value ?? 0),
         predicted_value: Number(row.predicted_value ?? 0),
+        percent_change: computePercentChange(Number(row.baseline_value ?? 0), Number(row.predicted_value ?? 0)),
       })),
     [displayMode, inference, populationPattern],
   );
@@ -297,47 +346,40 @@ export function App() {
   const roiValueById = useMemo(
     () =>
       Object.fromEntries(
-        ((displayMode === "population" ? populationPattern?.roi_table : inference?.roi_table) ?? [])
-          .filter((row) => Number.isFinite(Number(row.roi_id)))
+        roiRows
+          .filter((row) => row.roi_id !== undefined)
           .map((row) => [
             Number(row.roi_id),
             {
-              delta: Number(row.delta ?? 0),
-              percent_change: Number(row.percent_change ?? 0),
-              baseline_value: Number(row.baseline_value ?? 0),
-              predicted_value: Number(row.predicted_value ?? 0),
+              delta: row.delta,
+              delta_std: row.delta_std,
+              percent_change: row.percent_change,
+              baseline_value: row.baseline_value,
+              predicted_value: row.predicted_value,
             },
           ]),
-      ) as Record<number, { delta: number; percent_change: number; baseline_value: number; predicted_value: number }>,
-    [displayMode, inference, populationPattern],
+      ) as Record<number, { delta: number; delta_std: number; percent_change: number; baseline_value: number; predicted_value: number }>,
+    [roiRows],
   );
 
-  const chartMode = useMemo(() => {
-    const maxPercent = topChanges.reduce((current, row) => Math.max(current, Math.abs(row.percent_change)), 0);
-    return maxPercent >= 0.01 ? "percent" : "delta";
-  }, [topChanges]);
+  const chartValueKey = roiChartMetric;
 
   const orderedTopChanges = useMemo(
     () =>
-      [...topChanges].sort(
-        (lhs, rhs) =>
-          Math.abs(chartMode === "percent" ? rhs.percent_change : rhs.delta) -
-          Math.abs(chartMode === "percent" ? lhs.percent_change : lhs.delta),
-      ),
-    [chartMode, topChanges],
+      [...roiRows]
+        .sort((lhs, rhs) => Math.abs(Number(rhs[chartValueKey])) - Math.abs(Number(lhs[chartValueKey])))
+        .slice(0, 25),
+    [chartValueKey, roiRows],
   );
 
   const overlayAbsMax = useMemo(() => {
-    const values =
-      displayMode === "population"
-        ? (populationPattern?.roi_table ?? []).map((row) => Number(row.percent_change ?? 0))
-        : (inference?.inference.percent_change ?? []);
-    const maxValue = values.reduce((current, value) => Math.max(current, Math.abs(value)), 0);
+    const values = roiRows.map((row) => Math.abs(Number(row.delta_std ?? 0)));
+    const maxValue = values.reduce((current, value) => Math.max(current, value), 0);
     if (overlayScaleMode === "relative") {
       return Math.max(maxValue, 1e-4);
     }
     return Math.max(absoluteOverlayScale, 1e-4);
-  }, [absoluteOverlayScale, displayMode, inference, overlayScaleMode, populationPattern]);
+  }, [absoluteOverlayScale, overlayScaleMode, roiRows]);
 
   const currentMetadata =
     displayMode === "population"
@@ -346,17 +388,38 @@ export function App() {
           pattern: populationPattern?.label ?? selectedPopulationPattern,
           reference_split: populationManifest?.reference_split ?? "",
           reference_bucket: populationManifest?.reference_cohort_bucket ?? "",
-          anchor_age: populationManifest?.process_anchor_age_years ?? "",
+          ...(selectedPopulationPattern === "age"
+            ? {
+                age_range:
+                  populationManifest?.age_pattern != null
+                    ? `${populationManifest.age_pattern.age_min_years} to ${populationManifest.age_pattern.age_max_years}`
+                    : "",
+              }
+            : {
+                process_anchor_age_years: populationManifest?.process_anchor_age_years ?? "",
+              }),
         }
       : inference?.metadata ?? subjectMetadata ?? {};
+
   const activeOverlayImageUrl = displayMode === "population" ? populationPattern?.overlay_image_url ?? null : overlayImageUrl;
   const controlsDisabled = !selectedRun || selectedRow === null || loadingDefaults || loadingInference;
+  const groundTruthAgeYears =
+    displayMode === "subject"
+      ? Number(inference?.inference.ground_truth_age_years ?? subjectMetadata?.age ?? ageYears)
+      : null;
+  const predictedAgeYears =
+    displayMode === "subject"
+      ? Number(inference?.inference.predicted_age_years ?? subjectDefaults?.predicted_age_years ?? Number.NaN)
+      : null;
+  const inferredProcessDefaults =
+    displayMode === "subject" ? inference?.inference.default_process_latents ?? subjectDefaults?.process_latents ?? [] : [];
+
   const formatMetadataValue = (key: string, value: string | number | null) => {
     if (value === null || value === undefined || value === "") {
       return "";
     }
     if (typeof value === "number") {
-      if (key.toLowerCase() === "age") {
+      if (key.toLowerCase().includes("age")) {
         return value.toFixed(2);
       }
       if (Number.isInteger(value)) {
@@ -366,6 +429,19 @@ export function App() {
     }
     return String(value);
   };
+
+  const chartDescription =
+    displayMode === "population"
+      ? roiChartMetric === "delta_std"
+        ? "Bars show the isolated population-level effect in normalized ROI standard deviations. This is the most stable cross-ROI view."
+        : roiChartMetric === "delta"
+          ? "Bars show the isolated population-level mean raw ROI change."
+          : "Bars show 100 × (predicted - baseline) / |baseline| using the displayed population-level baseline and predicted values."
+      : roiChartMetric === "delta_std"
+        ? "Bars show subject-level anchored edits in normalized ROI standard deviations. This suppresses the tiny-ROI percentage explosion that made qualitative inspection unreliable."
+        : roiChartMetric === "delta"
+          ? "Bars show subject-level anchored edits in raw ROI units."
+          : "Bars show 100 × (predicted - baseline) / |baseline| for the selected subject. Tiny ROIs can still yield large percentages, so use this as a secondary diagnostic rather than the default ranking view.";
 
   return (
     <main className="app-shell">
@@ -439,18 +515,10 @@ export function App() {
         <div className="control-group">
           <label>View mode</label>
           <div className="segmented-control">
-            <button
-              className={viewMode === "slices" ? "active" : ""}
-              type="button"
-              onClick={() => setViewMode("slices")}
-            >
+            <button className={viewMode === "slices" ? "active" : ""} type="button" onClick={() => setViewMode("slices")}>
               2D slices
             </button>
-            <button
-              className={viewMode === "volume" ? "active" : ""}
-              type="button"
-              onClick={() => setViewMode("volume")}
-            >
+            <button className={viewMode === "volume" ? "active" : ""} type="button" onClick={() => setViewMode("volume")}>
               3D volume
             </button>
           </div>
@@ -475,8 +543,7 @@ export function App() {
             </button>
           </div>
           <p className="control-help">
-            Relative rescales each generated overlay to its own max change. Absolute preserves a fixed percent scale so
-            runs are comparable.
+            The atlas overlay is shown in standardized delta units, so the scale is less dominated by tiny ROI denominators.
           </p>
         </div>
 
@@ -500,12 +567,12 @@ export function App() {
             <input
               type="range"
               min={0.1}
-              max={100}
+              max={6}
               step={0.1}
               value={absoluteOverlayScale}
               onChange={(event) => setAbsoluteOverlayScale(Number(event.target.value))}
             />
-            <p className="control-help">Clip the blue/red overlay at ±{absoluteOverlayScale.toFixed(1)}% change.</p>
+            <p className="control-help">Clip the atlas overlay at ±{absoluteOverlayScale.toFixed(1)} SD of normalized ROI change.</p>
           </div>
         ) : null}
 
@@ -520,6 +587,37 @@ export function App() {
             onChange={(event) => setOverlayOpacity(Number(event.target.value))}
           />
           <p className="control-help">Current opacity: {overlayOpacity.toFixed(2)}</p>
+        </div>
+
+        <div className="control-group">
+          <label>Bar chart metric</label>
+          <div className="segmented-control segmented-control-compact">
+            <button className={roiChartMetric === "delta_std" ? "active" : ""} type="button" onClick={() => setRoiChartMetric("delta_std")}>
+              SD
+            </button>
+            <button className={roiChartMetric === "delta" ? "active" : ""} type="button" onClick={() => setRoiChartMetric("delta")}>
+              Raw
+            </button>
+            <button
+              className={roiChartMetric === "percent_change" ? "active" : ""}
+              type="button"
+              onClick={() => setRoiChartMetric("percent_change")}
+            >
+              %
+            </button>
+          </div>
+        </div>
+
+        <div className="control-group">
+          <label>Color palette</label>
+          <div className="segmented-control">
+            <button className={!colorblindMode ? "active" : ""} type="button" onClick={() => setColorblindMode(false)}>
+              Default
+            </button>
+            <button className={colorblindMode ? "active" : ""} type="button" onClick={() => setColorblindMode(true)}>
+              Colorblind
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -538,20 +636,43 @@ export function App() {
             <div className="panel-header">
               <h2>Latent summary</h2>
               <p>
-                The atlas stays grayscale until you click Generate. The age slider uses years, while process sliders
-                remain on a 0 to 1 scale.
+                Subject mode shows anchored edits relative to the selected subject’s inferred latent state. Population mode shows
+                precomputed isolated factors from the selected checkpoint.
               </p>
             </div>
             <div className="metric-row">
               <div>
                 <span>Requested age</span>
-                <strong>{ageYears.toFixed(2)} y</strong>
+                <strong>{ageYears.toFixed(1)} y</strong>
+              </div>
+              <div>
+                <span>Ground truth age</span>
+                <strong>{groundTruthAgeYears !== null && Number.isFinite(groundTruthAgeYears) ? `${groundTruthAgeYears.toFixed(1)} y` : "N/A"}</strong>
+              </div>
+            </div>
+            <div className="metric-row">
+              <div>
+                <span>Model-predicted age</span>
+                <strong>
+                  {displayMode === "subject" && predictedAgeYears !== null && Number.isFinite(predictedAgeYears)
+                    ? `${predictedAgeYears.toFixed(1)} y`
+                    : "N/A"}
+                </strong>
               </div>
               <div>
                 <span>Processes</span>
                 <strong>{runMetadata?.n_processes ?? processLatents.length ?? 0}</strong>
               </div>
             </div>
+            {displayMode === "subject" && inferredProcessDefaults.length > 0 ? (
+              <div className="latent-chip-group">
+                {inferredProcessDefaults.map((value, index) => (
+                  <span key={`latent-default-${index}`} className="latent-chip">
+                    r{index + 1}={value.toFixed(2)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <dl className="subject-meta">
               {Object.entries(currentMetadata).map(([key, value]) => (
                 <div key={key}>
@@ -571,6 +692,7 @@ export function App() {
               overlayOpacity={overlayOpacity}
               mode={viewMode}
               overlayScaleMode={overlayScaleMode}
+              colorblindMode={colorblindMode}
               roiMetadataById={roiMetadataById}
               roiValueById={roiValueById}
             />
@@ -583,7 +705,7 @@ export function App() {
               <h3>{loadingInference ? "Generating ROI changes" : "Loading subject defaults"}</h3>
               <p>
                 {loadingInference
-                  ? "Applying the selected age/process controls to the chosen subject."
+                  ? "Applying the selected age/process controls as anchored edits around the inferred subject state."
                   : "Inferring default slider values from the selected subject."}
               </p>
             </div>
@@ -614,15 +736,7 @@ export function App() {
         <section className="panel chart-panel">
           <div className="panel-header">
             <h3>Top ROI changes</h3>
-            <p>
-              {displayMode === "population"
-                ? chartMode === "percent"
-                  ? "Bars show the average isolated population-level percent change for the selected factor. Percent is computed as 100 × Δ / |baseline ROI volume|."
-                  : "Average percent changes are extremely small for this pattern, so the plot is showing raw ROI deltas instead."
-                : chartMode === "percent"
-                  ? "Bars show percent change relative to the selected subject's current ROI volume. Small baseline ROIs can therefore yield large percentages."
-                  : "Percent changes are extremely small for this checkpoint, so the plot is showing raw ROI deltas instead."}
-            </p>
+            <p>{chartDescription}</p>
           </div>
           <div className="chart-wrap">
             {orderedTopChanges.length > 0 ? (
@@ -630,25 +744,36 @@ export function App() {
                 <BarChart data={orderedTopChanges}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="name" hide />
-                  <YAxis
-                    tickFormatter={(value) =>
-                      chartMode === "percent" ? `${Number(value).toFixed(1)}%` : Number(value).toFixed(1)
-                    }
-                  />
+                  <YAxis tickFormatter={(value) => formatMetricValue(roiChartMetric, Number(value))} />
                   <Tooltip
                     formatter={(value: number, key: string, item: any) => {
-                      if (key === "percent_change" || key === "delta") {
-                        return [
-                          chartMode === "percent"
-                            ? `${Number(item.payload.percent_change).toFixed(1)}%`
-                            : `${Number(item.payload.delta).toFixed(1)}`,
-                          `Δ=${item.payload.delta.toFixed(1)} | %=${item.payload.percent_change.toFixed(1)} | baseline=${item.payload.baseline_value.toFixed(1)} | predicted=${item.payload.predicted_value.toFixed(1)}`,
-                        ];
+                      if (key === chartValueKey) {
+                        return [formatMetricValue(roiChartMetric, Number(value)), metricLabel(roiChartMetric)];
                       }
                       return [String(value), key];
                     }}
+                    content={({ active, payload }: any) => {
+                      if (!active || !payload || payload.length === 0) {
+                        return null;
+                      }
+                      const row = payload[0]?.payload as RoiChartRow | null;
+                      if (!row) {
+                        return null;
+                      }
+                      return (
+                        <div className="latent-tooltip">
+                          <strong>{row.name}</strong>
+                          <p>
+                            Δstd={row.delta_std.toFixed(2)} | Δ={row.delta.toFixed(1)} | %={row.percent_change.toFixed(1)}
+                          </p>
+                          <p>
+                            baseline={row.baseline_value.toFixed(1)} | predicted={row.predicted_value.toFixed(1)}
+                          </p>
+                        </div>
+                      );
+                    }}
                   />
-                  <Bar dataKey={chartMode === "percent" ? "percent_change" : "delta"} fill="#1f6f8b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={chartValueKey} fill="#1f6f8b" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

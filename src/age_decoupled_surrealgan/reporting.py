@@ -21,7 +21,7 @@ TRAIN_TENSORBOARD_TAGS = {
     "decompose": "loss/reconstruction/decomposition",
     "identity": "loss/identity/exact_zero",
     "monotonicity": "loss/regularization/monotonicity",
-    "orthogonality": "loss/regularization/orthogonality",
+    "orthogonality": "loss/ablation/orthogonality",
     "covariance": "loss/regularization/age_process_covariance",
     "reference_process": "loss/regularization/reference_process_sparsity",
     "change_mag": "loss/ablation/change_magnitude",
@@ -57,14 +57,12 @@ VAL_TENSORBOARD_TAGS = {
     "process_pattern_correlation_abs_mean": "metric/validation/process_pattern_correlation_abs_mean",
     "age_positive_change_pct_mean": "metric/validation/age_positive_change_pct_mean",
     "mean_process_positive_change_pct_mean": "metric/validation/process_positive_change_pct_mean",
-    "latent_sensitivity_score": "metric/validation/latent_sensitivity_score",
-    "directional_latent_sensitivity_score": "metric/validation/directional_latent_sensitivity_score",
-    "collapse_aware_latent_sensitivity_score": "metric/validation/collapse_aware_latent_sensitivity_score",
+    "generator_response_score": "metric/validation/generator_response_score",
+    "generator_response_noncollapse_score": "metric/validation/generator_response_noncollapse_score",
     "process_latent_pairwise_correlation_abs_mean": "metric/validation/process_latent_pairwise_correlation_abs_mean",
     "composite_score": "selection/validation/composite_score",
-    "quality_score": "selection/validation/quality_score",
-    "directional_quality_score": "selection/validation/directional_quality_score",
-    "collapse_aware_quality_score": "selection/validation/collapse_aware_quality_score",
+    "selection_score": "selection/validation/selection_score",
+    "collapse_aware_selection_score": "selection/validation/collapse_aware_selection_score",
 }
 
 
@@ -128,8 +126,8 @@ def epoch_log_line(
         f"age={train_metrics['age_sup']:.4f} "
         f"decomp={train_metrics['decompose']:.4f} "
         f"val: comp={val_metrics['composite_score']:.4f} "
-        f"qual={val_metrics.get('quality_score', val_metrics['composite_score']):.4f} "
-        f"sens={val_metrics.get('latent_sensitivity_score', 0.0):.4f} "
+        f"sel={val_metrics.get('selection_score', val_metrics.get('quality_score', val_metrics['composite_score'])):.4f} "
+        f"resp={val_metrics.get('generator_response_score', val_metrics.get('latent_sensitivity_score', 0.0)):.4f} "
         f"age_corr={val_metrics['age_latent_age_correlation']:.4f} "
         f"resid_age={val_metrics['mean_absolute_residual_process_age_correlation']:.4f}"
     )
@@ -182,7 +180,11 @@ def startup_summary_lines(
             f"encoder={encoder_hidden_dims}, generator={generator_hidden_dims}, "
             f"discriminator={discriminator_hidden_dims}, decomposer={decomposer_hidden_dims}"
         ),
-        f"Checkpoint epochs: {checkpoint_epochs} plus best-per-repetition checkpoint",
+        (
+            f"Checkpoint epochs: {checkpoint_epochs} plus best-per-repetition checkpoint"
+            if checkpoint_epochs
+            else "Checkpoint epochs: best-per-repetition checkpoint only"
+        ),
     ]
 
 
@@ -222,7 +224,7 @@ def save_run_markdown_summary(summary: dict[str, Any], output_path: Path) -> Non
                 f"### {split_name}",
                 "",
                 f"- Composite score: `{metrics['composite_score']:.4f}`",
-                f"- Quality score: `{metrics.get('quality_score', metrics['composite_score']):.4f}`",
+                f"- Selection score: `{metrics.get('selection_score', metrics.get('quality_score', metrics['composite_score'])):.4f}`",
                 f"- Age latent vs age correlation: `{metrics['age_latent_age_correlation']:.4f}`",
                 f"- Mean absolute process-age correlation: `{metrics['mean_absolute_process_age_correlation']:.4f}`",
                 f"- Mean absolute residual process-age correlation: `{metrics['mean_absolute_residual_process_age_correlation']:.4f}`",

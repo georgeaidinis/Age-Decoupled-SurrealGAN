@@ -1,4 +1,4 @@
-experiment_name = "age-decoupled-surrealgan"
+experiment_name = "baseline"
 
 [paths]
 raw_dataset = "datasets/cleaned_istaging.csv"
@@ -31,6 +31,7 @@ roi_normalization = "zscore"
 roi_normalization_std_scale = 1.0
 roi_normalization_clip = 6.0
 roi_normalization_epsilon = 0.000001
+extra_metadata_columns = ["Race", "Ethnicity", "Education_Years", "Education_Other", "APOE_Genotype", "APOE4_Alleles", "MMSE", "DSST", "DLICV", "BMI", "Sleep", "Hypertension", "Diabetes", "Hyperlipidemia", "Smoking", "Smoking_Years", "Alcoholic", "Exercise", "SPARE_AD", "SPARE_BA"]
 
 [model]
 n_processes = 5
@@ -60,9 +61,9 @@ target_regular_checkpoints = 2
 log_every = 10
 console_log_every = 1
 monitor_split = "val"
-monitor_metric = "collapse_aware_quality_score"
+monitor_metric = "collapse_aware_selection_score"
 sensitivity_eval_subjects = 64
-sensitivity_process_anchor_age = 20.0
+sensitivity_process_anchor_age = 50.0
 resume_run_dir = ""
 sampled_process_one_hot_only = true
 low_activation_max = 0.05
@@ -76,13 +77,13 @@ latent_reconstruction = 2.0
 decomposition = 2.0
 identity = 1.0
 monotonicity = 0.75
-process_orthogonality = 0.25
-age_process_covariance = 0.25
-reference_process_sparsity = 0.10
-change_magnitude = 0.10
+process_orthogonality = 0.0
+age_process_covariance = 0.0
+reference_process_sparsity = 0.02
+change_magnitude = 0.02
 low_activation_identity = 0.25
 process_age_correlation = 0.10
-process_latent_sparsity = 0.05
+process_latent_sparsity = 0.02
 low_activation_max = 0.05
 age_sensitivity = 0.50
 process_sensitivity = 1.00
@@ -100,13 +101,22 @@ trials = 20
 study_name = "age_decoupled_surrealgan"
 storage = "sqlite:///runs/optuna_age_decoupled_surrealgan.db"
 resume_if_exists = true
-objective_metric = "collapse_aware_quality_score"
+objective_metric = "collapse_aware_selection_score"
 generator_process_separation_min = 0.1
 generator_process_separation_max = 1.0
-generator_process_redundancy_min = 0.1
-generator_process_redundancy_max = 1.0
+generator_process_redundancy_min = 0.25
+generator_process_redundancy_max = 1.25
 process_latent_pairwise_correlation_min = 0.0
 process_latent_pairwise_correlation_max = 0.6
+
+[selection]
+min_age_latent_age_correlation = 0.70
+min_composite_score = 0.20
+min_mean_process_sensitivity_pct_mean = 0.05
+min_process_separation_pct_mean = 0.02
+max_process_pattern_correlation_abs_mean = 0.98
+max_process_latent_pairwise_correlation_abs_mean = 0.90
+max_mean_absolute_residual_process_age_correlation = 0.20
 
 [app]
 api_host = "127.0.0.1"

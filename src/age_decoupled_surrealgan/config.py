@@ -49,6 +49,30 @@ class DataConfig:
     roi_normalization_std_scale: float = 1.0
     roi_normalization_clip: float = 6.0
     roi_normalization_epsilon: float = 1.0e-6
+    extra_metadata_columns: list[str] = field(
+        default_factory=lambda: [
+            "Race",
+            "Ethnicity",
+            "Education_Years",
+            "Education_Other",
+            "APOE_Genotype",
+            "APOE4_Alleles",
+            "MMSE",
+            "DSST",
+            "DLICV",
+            "BMI",
+            "Sleep",
+            "Hypertension",
+            "Diabetes",
+            "Hyperlipidemia",
+            "Smoking",
+            "Smoking_Years",
+            "Alcoholic",
+            "Exercise",
+            "SPARE_AD",
+            "SPARE_BA",
+        ]
+    )
 
 
 @dataclass
@@ -82,7 +106,7 @@ class TrainingConfig:
     log_every: int = 10
     console_log_every: int = 1
     monitor_split: str = "val"
-    monitor_metric: str = "collapse_aware_quality_score"
+    monitor_metric: str = "collapse_aware_selection_score"
     sensitivity_eval_subjects: int = 64
     sensitivity_process_anchor_age: float = 20.0
     resume_run_dir: str | None = None
@@ -100,13 +124,13 @@ class LossConfig:
     decomposition: float = 2.0
     identity: float = 1.0
     monotonicity: float = 0.75
-    process_orthogonality: float = 0.25
-    age_process_covariance: float = 0.25
-    reference_process_sparsity: float = 0.1
-    change_magnitude: float = 0.1
+    process_orthogonality: float = 0.0
+    age_process_covariance: float = 0.0
+    reference_process_sparsity: float = 0.02
+    change_magnitude: float = 0.02
     low_activation_identity: float = 0.25
     process_age_correlation: float = 0.1
-    process_latent_sparsity: float = 0.05
+    process_latent_sparsity: float = 0.02
     low_activation_max: float = 0.05
     age_sensitivity: float = 0.5
     process_sensitivity: float = 1.0
@@ -115,7 +139,7 @@ class LossConfig:
     age_shrinkage: float = 0.0
     process_shrinkage: float = 0.0
     generator_process_separation: float = 1.0
-    generator_process_redundancy: float = 1.0
+    generator_process_redundancy: float = 0.5
     process_latent_pairwise_correlation: float = 0.5
 
 
@@ -127,7 +151,7 @@ class TuningConfig:
     study_name: str = "age_decoupled_surrealgan"
     storage: str = "sqlite:///runs/optuna_age_decoupled_surrealgan.db"
     resume_if_exists: bool = True
-    objective_metric: str = "collapse_aware_quality_score"
+    objective_metric: str = "collapse_aware_selection_score"
     width_options: list[int] = field(default_factory=lambda: [384, 512, 640])
     n_processes_options: list[int] = field(default_factory=lambda: [4, 5])
     batch_size_options: list[int] = field(default_factory=lambda: [96, 128])
@@ -153,20 +177,20 @@ class TuningConfig:
     identity_max: float = 4.0
     monotonicity_min: float = 0.1
     monotonicity_max: float = 0.6
-    process_orthogonality_min: float = 0.1
-    process_orthogonality_max: float = 0.45
-    age_process_covariance_min: float = 0.15
-    age_process_covariance_max: float = 0.6
+    process_orthogonality_min: float = 0.0
+    process_orthogonality_max: float = 0.0
+    age_process_covariance_min: float = 0.0
+    age_process_covariance_max: float = 0.0
     reference_process_sparsity_min: float = 0.02
-    reference_process_sparsity_max: float = 0.2
+    reference_process_sparsity_max: float = 0.08
     change_magnitude_min: float = 0.0
-    change_magnitude_max: float = 0.4
+    change_magnitude_max: float = 0.08
     low_activation_identity_min: float = 0.0
     low_activation_identity_max: float = 0.2
     process_age_correlation_min: float = 0.0
     process_age_correlation_max: float = 0.3
     process_latent_sparsity_min: float = 0.0
-    process_latent_sparsity_max: float = 0.2
+    process_latent_sparsity_max: float = 0.08
     age_sensitivity_min: float = 0.5
     age_sensitivity_max: float = 3.0
     process_sensitivity_min: float = 0.3
@@ -176,15 +200,26 @@ class TuningConfig:
     process_sensitivity_target_pct_min: float = 0.05
     process_sensitivity_target_pct_max: float = 0.35
     age_shrinkage_min: float = 0.0
-    age_shrinkage_max: float = 0.8
+    age_shrinkage_max: float = 0.0
     process_shrinkage_min: float = 0.0
-    process_shrinkage_max: float = 0.6
+    process_shrinkage_max: float = 0.0
     generator_process_separation_min: float = 0.1
     generator_process_separation_max: float = 1.0
     generator_process_redundancy_min: float = 0.1
     generator_process_redundancy_max: float = 1.0
     process_latent_pairwise_correlation_min: float = 0.0
     process_latent_pairwise_correlation_max: float = 0.6
+
+
+@dataclass
+class SelectionConfig:
+    min_age_latent_age_correlation: float = 0.70
+    min_composite_score: float = 0.20
+    min_mean_process_sensitivity_pct_mean: float = 0.05
+    min_process_separation_pct_mean: float = 0.02
+    max_process_pattern_correlation_abs_mean: float = 0.98
+    max_process_latent_pairwise_correlation_abs_mean: float = 0.90
+    max_mean_absolute_residual_process_age_correlation: float = 0.20
 
 
 @dataclass
@@ -203,6 +238,7 @@ class ProjectConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     losses: LossConfig = field(default_factory=LossConfig)
     tuning: TuningConfig = field(default_factory=TuningConfig)
+    selection: SelectionConfig = field(default_factory=SelectionConfig)
     app: AppConfig = field(default_factory=AppConfig)
 
     def as_dict(self) -> dict[str, Any]:
@@ -228,6 +264,7 @@ def _build_config(payload: dict[str, Any]) -> ProjectConfig:
         training=TrainingConfig(**payload.get("training", {})),
         losses=LossConfig(**payload.get("losses", {})),
         tuning=TuningConfig(**payload.get("tuning", {})),
+        selection=SelectionConfig(**payload.get("selection", {})),
         app=AppConfig(**payload.get("app", {})),
     )
 

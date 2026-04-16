@@ -150,20 +150,8 @@ def create_app(config: ProjectConfig):
         frame = frame.copy()
         frame["subject_id"] = frame["subject_id"].astype(str)
         process_columns = [f"r{i + 1}" for i in range(n_processes)]
-        keep_columns = [
-            "subject_id",
-            "study",
-            "age",
-            "sex",
-            "diagnosis_raw",
-            "diagnosis_group",
-            "cohort_bucket",
-            "age_latent",
-            *process_columns,
-        ]
-        frame = frame[[column for column in keep_columns if column in frame.columns]]
         total_rows = len(frame)
-        capped_limit = max(100, min(int(limit), 5000))
+        capped_limit = max(100, min(int(limit), 2500))
         if len(frame) > capped_limit:
             frame = frame.sample(capped_limit, random_state=config.data.split_seed).sort_values("age", kind="stable")
         else:
@@ -190,9 +178,9 @@ def create_app(config: ProjectConfig):
             raise HTTPException(status_code=400, detail=f"Invalid row_index: {value}") from None
         return row_index
 
-    def overlay_url_for_percent_change(percent_change: list[float], roi_df: pd.DataFrame) -> str:
+    def overlay_url_for_metric(roi_df: pd.DataFrame, value_column: str = "delta_std") -> str:
         overlay_data = np.zeros(segmentation_data.shape, dtype=np.float32)
-        lookup = roi_df.set_index("roi_id")["percent_change"].to_dict()
+        lookup = roi_df.set_index("roi_id")[value_column].to_dict()
         for roi_id, value in lookup.items():
             if pd.isna(roi_id):
                 continue
@@ -246,6 +234,7 @@ def create_app(config: ProjectConfig):
                 "n_processes": defaults["n_processes"],
                 "age_years": float(min(max(default_age_years, 20.0), 100.0)),
                 "age_latent": defaults["age_latent"],
+                "predicted_age_years": defaults["predicted_age_years"],
                 "process_latents": defaults["process_latents"],
             },
         }
@@ -304,14 +293,15 @@ def create_app(config: ProjectConfig):
         roi_df["baseline_value"] = inference["baseline_target"]
         roi_df["predicted_value"] = inference["synthetic_target"]
         roi_df["delta"] = inference["synthetic_delta"]
+        roi_df["delta_std"] = inference["synthetic_delta_std"]
         roi_df["percent_change"] = inference["percent_change"]
         roi_df["age_delta"] = inference["age_delta"]
         for idx in range(inference["n_processes"]):
             roi_df[f"process_{idx + 1}_delta"] = [values[idx] for values in zip(*inference["process_deltas"])]
-        roi_df["abs_percent_change"] = roi_df["percent_change"].abs()
-        top_changes = roi_df.sort_values("abs_percent_change", ascending=False).head(25)
+        roi_df["abs_delta_std"] = roi_df["delta_std"].abs()
+        top_changes = roi_df.sort_values(["abs_delta_std", "delta_std"], ascending=[False, False]).head(40)
         overlay_timer_start = time.perf_counter()
-        overlay_url = overlay_url_for_percent_change(inference["percent_change"], roi_df)
+        overlay_url = overlay_url_for_metric(roi_df, value_column="delta_std")
         overlay_seconds = time.perf_counter() - overlay_timer_start
         if debug_mode:
             print(
@@ -330,8 +320,8 @@ def create_app(config: ProjectConfig):
                     ],
                     "delta_abs_max": float(roi_df["delta"].abs().max()),
                     "delta_abs_mean": float(roi_df["delta"].abs().mean()),
-                    "pct_abs_max": float(roi_df["percent_change"].abs().max()),
-                    "pct_abs_mean": float(roi_df["percent_change"].abs().mean()),
+                    "delta_std_abs_max": float(roi_df["delta_std"].abs().max()),
+                    "delta_std_abs_mean": float(roi_df["delta_std"].abs().mean()),
                     "inference_duration": format_duration(inference_seconds),
                     "overlay_duration": format_duration(overlay_seconds),
                     "total_duration": format_duration(time.perf_counter() - request_timer_start),

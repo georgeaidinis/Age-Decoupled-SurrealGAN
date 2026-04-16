@@ -90,6 +90,9 @@ def canonicalize_dataframe(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[pd.Dat
     ]
     frame["eligible"] = frame["cohort_bucket"].isin(["ref", "tar"])
     frame["is_holdout_study"] = frame["study"] == cfg.data.holdout_study
+    extra_metadata_columns = [column for column in cfg.data.extra_metadata_columns if column in frame.columns]
+    for column in extra_metadata_columns:
+        frame[column] = frame[column]
     keep_columns = [
         "subject_id",
         "study",
@@ -100,7 +103,7 @@ def canonicalize_dataframe(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[pd.Dat
         "cohort_bucket",
         "eligible",
         "is_holdout_study",
-    ] + feature_columns
+    ] + extra_metadata_columns + feature_columns
     return frame[keep_columns], feature_columns
 
 

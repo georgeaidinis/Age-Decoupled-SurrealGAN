@@ -47,6 +47,7 @@ def align_process_latents(lhs: np.ndarray, rhs: np.ndarray) -> tuple[list[int], 
 
 
 def compute_repetition_agreement(prediction_frames: list[pd.DataFrame], n_processes: int) -> dict[str, Any]:
+    """Measure how reproducibly the learned process latents align across repetitions."""
     if len(prediction_frames) <= 1:
         return {
             "mean_dimension_correlation": 1.0,
@@ -84,6 +85,7 @@ def compute_repetition_agreement(prediction_frames: list[pd.DataFrame], n_proces
 
 
 def compute_age_metrics(prediction_frame: pd.DataFrame, n_processes: int) -> dict[str, Any]:
+    """Compute age-disentanglement metrics from a saved latent prediction frame."""
     frame = prediction_frame.loc[prediction_frame["age"].notna()].copy()
     if frame.empty:
         return {
@@ -140,8 +142,13 @@ def summarize_latent_sensitivity(
     age_positive_change_pct_mean: float = 0.0,
     process_positive_change_pct_means: dict[str, float] | None = None,
 ) -> dict[str, Any]:
+    """Summarize direct generator responsiveness from isolated age/process perturbations.
+
+    The returned scores are not correlations with chronological age. They are generator-probe
+    summaries built from synthetic changes produced by moving age or process controls.
+    """
     mean_process_sensitivity = float(np.mean(list(process_sensitivity_pct_means.values()))) if process_sensitivity_pct_means else 0.0
-    quality = float(
+    generator_response_score = float(
         np.log1p(max(age_sensitivity_pct_mean, 0.0))
         + np.log1p(max(mean_process_sensitivity, 0.0))
         + 0.5 * np.log1p(max(process_separation_pct_mean, 0.0))
@@ -153,13 +160,8 @@ def summarize_latent_sensitivity(
         if process_positive_change_pct_means
         else 0.0
     )
-    directional_quality = float(
-        quality
-        - 0.5 * np.log1p(max(age_positive_change_pct_mean, 0.0))
-        - 0.25 * np.log1p(max(mean_process_positive_change, 0.0))
-    )
-    collapse_aware_quality = float(
-        directional_quality
+    generator_response_noncollapse_score = float(
+        generator_response_score
         - 0.75 * np.log1p(max(process_pattern_correlation_abs_mean, 0.0))
     )
     return {
@@ -171,7 +173,11 @@ def summarize_latent_sensitivity(
         "age_positive_change_pct_mean": float(age_positive_change_pct_mean),
         "process_positive_change_pct_means": process_positive_change_pct_means,
         "mean_process_positive_change_pct_mean": mean_process_positive_change,
-        "latent_sensitivity_score": quality,
-        "directional_latent_sensitivity_score": directional_quality,
-        "collapse_aware_latent_sensitivity_score": collapse_aware_quality,
+        "generator_response_score": generator_response_score,
+        "generator_response_noncollapse_score": generator_response_noncollapse_score,
+        # Backward-compatible aliases retained while downstream code is migrated.
+        # "directional" no longer represents a shrinkage-aware objective in the active workflow.
+        "latent_sensitivity_score": generator_response_score,
+        "directional_latent_sensitivity_score": generator_response_noncollapse_score,
+        "collapse_aware_latent_sensitivity_score": generator_response_noncollapse_score,
     }
