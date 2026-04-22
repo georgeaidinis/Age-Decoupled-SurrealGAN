@@ -143,7 +143,7 @@ def create_app(config: ProjectConfig):
         return frame[columns].to_dict(orient="records")
 
     @app.get("/runs/{run_name}/latent-space/{split_name}")
-    def get_latent_space(run_name: str, split_name: str, limit: int = 2500) -> dict[str, Any]:
+    def get_latent_space(run_name: str, split_name: str, limit: int = 750) -> dict[str, Any]:
         summary = run_summary(run_name)
         n_processes = int(torch_load_metadata(Path(summary["selected_checkpoint"]))["n_processes"])
         frame = prediction_frame(run_name, split_name)
@@ -151,7 +151,7 @@ def create_app(config: ProjectConfig):
         frame["subject_id"] = frame["subject_id"].astype(str)
         process_columns = [f"r{i + 1}" for i in range(n_processes)]
         total_rows = len(frame)
-        capped_limit = max(100, min(int(limit), 2500))
+        capped_limit = max(100, min(int(limit), 750))
         if len(frame) > capped_limit:
             frame = frame.sample(capped_limit, random_state=config.data.split_seed).sort_values("age", kind="stable")
         else:

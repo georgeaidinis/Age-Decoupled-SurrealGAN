@@ -415,6 +415,7 @@ def ensure_prediction_splits(
         target_path = prediction_dir / f"{split_name}.csv"
         if target_path.exists() and not force:
             continue
+        print(f"[analysis] building prediction split {split_name} for {run_dir.name}")
         frame = _load_split_frame(processed_dir, split_name)
         prediction = _prediction_frame_for_split(
             checkpoint_path=checkpoint_path,
@@ -460,6 +461,7 @@ def build_run_analysis_artifacts(
     if manifest_path.exists() and not force:
         return json.loads(manifest_path.read_text(encoding="utf-8"))
 
+    print(f"[analysis] computing population patterns for {run_dir.name}")
     population_manifest = _compute_population_patterns(
         checkpoint_path=checkpoint_path,
         config=config,
@@ -467,7 +469,9 @@ def build_run_analysis_artifacts(
         run_dir=run_dir,
         device=device or config.training.device,
     )
+    print(f"[analysis] computing repetition stability for {run_dir.name}")
     repetition_manifest = _compute_repetition_stability(run_dir, n_processes)
+    print(f"[analysis] computing correlation artifacts for {run_dir.name}")
     correlation_manifest = _compute_correlation_artifacts(run_dir, n_processes)
     analysis_manifest = {
         "population_patterns": population_manifest,

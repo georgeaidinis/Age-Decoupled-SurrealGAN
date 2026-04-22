@@ -25,6 +25,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Resume an interrupted training run from an existing run directory.",
     )
+    finalize_parser = subparsers.add_parser(
+        "finalize-run",
+        help="Finish the post-training agreement/evaluation/analysis stages for an existing run directory.",
+    )
+    finalize_parser.add_argument("--run-dir", type=str, required=True, help="Existing run directory to finalize.")
+    finalize_parser.add_argument(
+        "--record-path",
+        type=str,
+        default=None,
+        help="Optional JSON record path for downstream model-selection sweeps.",
+    )
     train_from_study_parser = subparsers.add_parser(
         "train-best-from-study",
         help="Load the best Optuna trial from a tuning study and run repeated training with it.",
@@ -80,6 +91,20 @@ def main() -> None:
     if args.command == "train":
         summary = AgeDecoupledTrainer(config, config_path=args.config).train(resume_run_dir=args.resume_run_dir)
         print(f"Training completed. Selected checkpoint: {summary['selected_checkpoint']}")
+        return
+
+    if args.command == "finalize-run":
+        summary = AgeDecoupledTrainer(config, config_path=args.config).finalize_existing_run(args.run_dir)
+        if args.record_path:
+            save_json(
+                Path(args.record_path),
+                {
+                    "run_dir": summary["run_dir"],
+                    "selected_checkpoint": summary["selected_checkpoint"],
+                    "k": config.model.n_processes,
+                },
+            )
+        print(f"Run finalization completed. Selected checkpoint: {summary['selected_checkpoint']}")
         return
 
     if args.command == "train-best-from-study":

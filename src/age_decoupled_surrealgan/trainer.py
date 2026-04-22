@@ -461,6 +461,151 @@ class AgeDecoupledTrainer:
         frame = pd.read_csv(path)
         return frame.to_dict(orient="records")
 
+    def _log_stage(self, log_path: Path, message: str) -> None:
+        print(message)
+        append_log_line(log_path, message)
+
+    def _repetition_state_from_run_dir(self, run_dir: Path) -> tuple[list[dict[str, Any]], list[Path]]:
+        summary_csv = run_dir / "metrics" / "repetition_summary.csv"
+        if summary_csv.exists():
+            repetition_summaries = pd.read_csv(summary_csv).to_dict(orient="records")
+        else:
+            repetition_summaries = []
+            for prediction_path in sorted((run_dir / "predictions").glob("repetition_*_val.csv")):
+                repetition_index = int(prediction_path.stem.split("_")[1])
+                checkpoint_path = run_dir / f"repetition_{repetition_index:02d}_best.pt"
+                metrics_path = run_dir / "metrics" / f"repetition_{repetition_index:02d}_val.json"
+                best_score = float("-inf")
+                if metrics_path.exists():
+                    metrics_payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+                    best_score = float(
+                        metrics_payload.get(
+                            self.config.training.monitor_metric,
+                            metrics_payload.get("collapse_aware_selection_score", metrics_payload.get("selection_score", 0.0)),
+                        )
+                    )
+                repetition_summaries.append(
+                    {
+                        "repetition_index": repetition_index,
+                        "best_checkpoint": str(checkpoint_path),
+                        "best_score": best_score,
+                    }
+                )
+        repetition_summaries = sorted(repetition_summaries, key=lambda row: int(row["repetition_index"]))
+        repetition_val_paths = sorted((run_dir / "predictions").glob("repetition_*_val.csv"), key=lambda path: path.name)
+        return repetition_summaries, repetition_val_paths
+
+    def _finalize_run_outputs(
+        self,
+        *,
+        run_dir: Path,
+        repetition_summaries: list[dict[str, Any]],
+        repetition_val_paths: list[Path],
+        log_path: Path,
+        run_started_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        if not repetition_summaries or not repetition_val_paths:
+            raise RuntimeError(
+                f"Cannot finalize run {run_dir}: repetition summaries or repetition validation predictions are missing."
+            )
+
+        self._log_stage(log_path, f"Starting agreement computation across {len(repetition_val_paths)} repetition(s)")
+        agreement_timer_start = time.perf_counter()
+        agreement = aggregate_repetition_predictions(repetition_val_paths, self.config.model.n_processes)
+        agreement_seconds = time.perf_counter() - agreement_timer_start
+        selected_repetition = agreement["best_repetition_index"]
+        selected_checkpoint = Path(repetition_summaries[selected_repetition]["best_checkpoint"])
+        self._log_stage(
+            log_path,
+            (
+                f"Finished agreement computation in {format_duration(agreement_seconds)} "
+                f"(selected_repetition={selected_repetition}, checkpoint={selected_checkpoint.name})"
+            ),
+        )
+
+        self._log_stage(log_path, f"Loading selected model from {selected_checkpoint.name}")
+        selected_model_load_start = time.perf_counter()
+        best_model, _ = load_checkpoint(selected_checkpoint, device=str(self.device))
+        best_model.eval()
+        selected_model_load_seconds = time.perf_counter() - selected_model_load_start
+        self._log_stage(
+            log_path,
+            f"Loaded selected model in {format_duration(selected_model_load_seconds)}",
+        )
+
+        split_metrics: dict[str, Any] = {}
+        split_timing: dict[str, dict[str, float]] = {}
+        for split_name in ["train", "val", "id_test", "ood_test", "application"]:
+            self._log_stage(log_path, f"Starting split evaluation for {split_name}")
+            split_timer_start = time.perf_counter()
+            inference_timer_start = time.perf_counter()
+            prediction_frame = self._predict_split(best_model, split_name)
+            inference_seconds = time.perf_counter() - inference_timer_start
+            prediction_path = run_dir / "predictions" / f"{split_name}.csv"
+            save_prediction_frame(prediction_frame, prediction_path)
+            evaluation_timer_start = time.perf_counter()
+            metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
+            sensitivity_metrics = self._compute_latent_sensitivity_metrics(best_model, split_name)
+            evaluation_seconds = time.perf_counter() - evaluation_timer_start
+            split_metrics[split_name] = self._selection_metrics(metrics, sensitivity_metrics)
+            split_timing[split_name] = {
+                "prediction_seconds": inference_seconds,
+                "evaluation_seconds": evaluation_seconds,
+                "total_seconds": time.perf_counter() - split_timer_start,
+            }
+            save_metrics(split_metrics[split_name], run_dir / "metrics" / f"{split_name}.json")
+            self._log_stage(
+                log_path,
+                (
+                    f"Completed split {split_name}: "
+                    f"predict={format_duration(inference_seconds)} "
+                    f"evaluate={format_duration(evaluation_seconds)} "
+                    f"total={format_duration(split_timing[split_name]['total_seconds'])}"
+                ),
+            )
+
+        run_duration_seconds = 0.0
+        if run_started_at is not None:
+            run_duration_seconds = max(0.0, (datetime.now() - run_started_at).total_seconds())
+
+        summary = {
+            "run_dir": str(run_dir),
+            "started_at": run_started_at.isoformat() if run_started_at is not None else None,
+            "completed_at": datetime.now().isoformat(),
+            "selected_repetition": selected_repetition,
+            "selected_checkpoint": str(selected_checkpoint),
+            "agreement": agreement,
+            "repetitions": repetition_summaries,
+            "split_metrics": split_metrics,
+            "timing": {
+                "total_seconds": run_duration_seconds,
+                "agreement_seconds": agreement_seconds,
+                "selected_model_load_seconds": selected_model_load_seconds,
+                "split_timing": split_timing,
+            },
+        }
+        save_json(run_dir / "run_summary.json", summary)
+
+        self._log_stage(log_path, "Starting post-run analysis artifact generation")
+        analysis_timer_start = time.perf_counter()
+        analysis_manifest = build_run_analysis_artifacts(run_dir, self.config, force=True, device=str(self.device))
+        analysis_seconds = time.perf_counter() - analysis_timer_start
+        summary["analysis"] = analysis_manifest
+        summary["timing"]["analysis_seconds"] = analysis_seconds
+        if run_started_at is not None:
+            summary["timing"]["total_seconds"] = max(0.0, (datetime.now() - run_started_at).total_seconds())
+        save_json(run_dir / "run_summary.json", summary)
+        save_split_metrics_tables(split_metrics, run_dir / "metrics")
+        save_run_markdown_summary(summary, run_dir / "metrics" / "run_summary.md")
+        self._log_stage(
+            log_path,
+            (
+                f"Finished analysis artifact generation in {format_duration(analysis_seconds)}. "
+                f"Run completed in {format_duration(summary['timing'].get('total_seconds', 0.0))}"
+            ),
+        )
+        return summary
+
     def _predict_split(
         self,
         model: AgeDecoupledSurrealGAN,
@@ -953,76 +1098,35 @@ class AgeDecoupledTrainer:
         save_records_csv(run_dir / "metrics" / "epoch_history.csv", epoch_history_records)
         save_jsonl(run_dir / "logs" / "epoch_history.jsonl", epoch_history_records)
         save_records_csv(run_dir / "metrics" / "repetition_summary.csv", repetition_summaries)
-
-        agreement_timer_start = time.perf_counter()
-        agreement = aggregate_repetition_predictions(repetition_val_paths, self.config.model.n_processes)
-        agreement_seconds = time.perf_counter() - agreement_timer_start
-        selected_repetition = agreement["best_repetition_index"]
-        selected_checkpoint = Path(repetition_summaries[selected_repetition]["best_checkpoint"])
-
-        selected_model_load_start = time.perf_counter()
-        best_model, checkpoint = load_checkpoint(selected_checkpoint, device=str(self.device))
-        best_model.eval()
-        selected_model_load_seconds = time.perf_counter() - selected_model_load_start
-
-        split_metrics: dict[str, Any] = {}
-        split_timing: dict[str, dict[str, float]] = {}
-        for split_name in ["train", "val", "id_test", "ood_test", "application"]:
-            split_timer_start = time.perf_counter()
-            inference_timer_start = time.perf_counter()
-            prediction_frame = self._predict_split(best_model, split_name)
-            inference_seconds = time.perf_counter() - inference_timer_start
-            prediction_path = run_dir / "predictions" / f"{split_name}.csv"
-            save_prediction_frame(prediction_frame, prediction_path)
-            evaluation_timer_start = time.perf_counter()
-            metrics = evaluate_prediction_frame(prediction_frame, self.config.model.n_processes)
-            sensitivity_metrics = self._compute_latent_sensitivity_metrics(best_model, split_name)
-            evaluation_seconds = time.perf_counter() - evaluation_timer_start
-            split_metrics[split_name] = self._selection_metrics(metrics, sensitivity_metrics)
-            split_timing[split_name] = {
-                "prediction_seconds": inference_seconds,
-                "evaluation_seconds": evaluation_seconds,
-                "total_seconds": time.perf_counter() - split_timer_start,
-            }
-            save_metrics(split_metrics[split_name], run_dir / "metrics" / f"{split_name}.json")
-            split_line = (
-                f"Completed split {split_name}: "
-                f"predict={format_duration(inference_seconds)} "
-                f"evaluate={format_duration(evaluation_seconds)} "
-                f"total={format_duration(split_timing[split_name]['total_seconds'])}"
-            )
-            print(split_line)
-            append_log_line(log_path, split_line)
-
-        run_duration_seconds = time.perf_counter() - run_timer_start
-
-        summary = {
-            "run_dir": str(run_dir),
-            "started_at": run_started_at.isoformat(),
-            "completed_at": datetime.now().isoformat(),
-            "selected_repetition": selected_repetition,
-            "selected_checkpoint": str(selected_checkpoint),
-            "agreement": agreement,
-            "repetitions": repetition_summaries,
-            "split_metrics": split_metrics,
-            "timing": {
-                "total_seconds": run_duration_seconds,
-                "agreement_seconds": agreement_seconds,
-                "selected_model_load_seconds": selected_model_load_seconds,
-                "split_timing": split_timing,
-            },
-        }
-        save_json(run_dir / "run_summary.json", summary)
-        analysis_manifest = build_run_analysis_artifacts(run_dir, self.config, force=True, device=str(self.device))
-        summary["analysis"] = analysis_manifest
-        save_json(run_dir / "run_summary.json", summary)
-        save_split_metrics_tables(split_metrics, run_dir / "metrics")
-        save_run_markdown_summary(summary, run_dir / "metrics" / "run_summary.md")
-        completion_line = (
-            f"Run completed in {format_duration(run_duration_seconds)} "
-            f"(agreement={format_duration(agreement_seconds)}, "
-            f"selected_model_load={format_duration(selected_model_load_seconds)})"
+        self._log_stage(log_path, "Finished repetition training. Starting run finalization.")
+        return self._finalize_run_outputs(
+            run_dir=run_dir,
+            repetition_summaries=repetition_summaries,
+            repetition_val_paths=repetition_val_paths,
+            log_path=log_path,
+            run_started_at=run_started_at,
         )
-        print(completion_line)
-        append_log_line(log_path, completion_line)
-        return summary
+
+    def finalize_existing_run(self, run_dir: str | Path) -> dict[str, Any]:
+        run_path = Path(run_dir).expanduser().resolve()
+        log_path = run_path / "logs" / "train.log"
+        existing_summary = {}
+        summary_path = run_path / "run_summary.json"
+        if summary_path.exists():
+            existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        run_started_at = None
+        started_at = existing_summary.get("started_at")
+        if isinstance(started_at, str) and started_at:
+            try:
+                run_started_at = datetime.fromisoformat(started_at)
+            except ValueError:
+                run_started_at = None
+        repetition_summaries, repetition_val_paths = self._repetition_state_from_run_dir(run_path)
+        self._log_stage(log_path, f"Finalizing existing run at {run_path}")
+        return self._finalize_run_outputs(
+            run_dir=run_path,
+            repetition_summaries=repetition_summaries,
+            repetition_val_paths=repetition_val_paths,
+            log_path=log_path,
+            run_started_at=run_started_at,
+        )

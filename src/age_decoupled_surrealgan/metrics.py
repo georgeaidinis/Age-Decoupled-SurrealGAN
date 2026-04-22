@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import linear_sum_assignment
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
 
@@ -22,7 +23,21 @@ def align_process_latents(lhs: np.ndarray, rhs: np.ndarray) -> tuple[list[int], 
     best_order = list(range(n_processes))
     best_dim_score = -np.inf
     best_diff_score = -np.inf
-    for order in itertools.permutations(range(n_processes)):
+
+    # Exhaustive permutation matching becomes intractable for large K
+    # (for example 11! = 39,916,800). Use exact search only while it is still
+    # cheap, then switch to Hungarian assignment on the dimension-correlation matrix.
+    if n_processes <= 7:
+        candidate_orders = itertools.permutations(range(n_processes))
+    else:
+        correlation_matrix = np.zeros((n_processes, n_processes), dtype=float)
+        for i in range(n_processes):
+            for j in range(n_processes):
+                correlation_matrix[i, j] = safe_pearsonr(lhs[:, i], rhs[:, j])
+        _, column_indices = linear_sum_assignment(-correlation_matrix)
+        candidate_orders = [tuple(int(index) for index in column_indices.tolist())]
+
+    for order in candidate_orders:
         dim_scores = [safe_pearsonr(lhs[:, idx], rhs[:, order[idx]]) for idx in range(n_processes)]
         dim_mean = float(np.mean(dim_scores))
         if n_processes == 1:
